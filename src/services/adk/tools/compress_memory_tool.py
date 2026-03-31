@@ -38,13 +38,11 @@ logger = setup_logger(__name__)
 
 
 async def create_compress_memory_tool(
-    account_id: str,
     memory_base_config_id: Optional[str] = None,
 ) -> FunctionTool:
-    """Factory function to create a memory compression tool for a specific account
+    """Factory function to create a memory compression tool.
 
     Args:
-        account_id: The account ID to compress memory for
         memory_base_config_id: Optional UUID of the memory base configuration to use
     """
     async def compress_memory_with_client(
@@ -97,7 +95,7 @@ async def create_compress_memory_tool(
                 }
             
             logger.info(
-                f"Compressing memory for account {account_id}, app '{app_name}', user '{user_id}' (force={force})"
+                f"Compressing memory for app '{app_name}', user '{user_id}' (force={force})"
             )
             
             # Call knowledge service HTTP API
@@ -111,11 +109,10 @@ async def create_compress_memory_tool(
                 "force": force,
             }
             
-            # Build headers with account_id, memory_base_config_id, and service token
+            # Build headers with memory_base_config_id and service token
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "account-id": str(account_id),
             }
             
             # Add service token for service-to-service authentication

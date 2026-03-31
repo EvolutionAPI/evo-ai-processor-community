@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.services.google_sheets_service import GoogleSheetsService
-from src.api.dependencies import verify_account_access
 from src.config.database import get_db
 from src.utils.response import success_response, error_response, map_status_to_error_code
 from src.schemas.responses import SuccessResponse, ErrorResponse
@@ -29,7 +28,7 @@ from src.schemas.response_models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/accounts/{account_id}/agents/{agent_id}/integrations/google-sheets",
+    prefix="/agents/{agent_id}/integrations/google-sheets",
     tags=["google-sheets"],
 )
 
@@ -156,12 +155,10 @@ async def get_google_sheets_service(
     }
 )
 async def generate_authorization(
-    account_id: str,
     agent_id: str,
     authorization_request: AuthorizationRequest,
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Generate OAuth 2.0 authorization URL for Google Sheets.
@@ -170,7 +167,6 @@ async def generate_authorization(
     """
     try:
         url = service.generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
             email=authorization_request.email
         )
@@ -200,13 +196,11 @@ async def generate_authorization(
     }
 )
 async def complete_authorization(
-    account_id: str,
     agent_id: str,
     callback_request: CallbackRequest,
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
     db: Session = Depends(get_db),
-    _: None = Depends(verify_account_access)
 ):
     """
     Complete OAuth 2.0 authorization flow.
@@ -216,7 +210,6 @@ async def complete_authorization(
     """
     try:
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=callback_request.code,
             state=callback_request.state,
@@ -269,11 +262,9 @@ async def complete_authorization(
     }
 )
 async def get_spreadsheets(
-    account_id: str,
     agent_id: str,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
     db: Session = Depends(get_db),
-    _: None = Depends(verify_account_access)
 ):
     """
     Get list of available Google Sheets spreadsheets.
@@ -282,7 +273,6 @@ async def get_spreadsheets(
     """
     try:
         spreadsheets = await service.get_spreadsheets(
-            account_id=account_id,
             agent_id=agent_id,
             db=db
         )
@@ -323,12 +313,10 @@ async def get_spreadsheets(
     }
 )
 async def save_configuration(
-    account_id: str,
     agent_id: str,
     config_request: ConfigurationRequest,
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Save Google Sheets configuration.
@@ -339,7 +327,6 @@ async def save_configuration(
         config = config_request.dict(exclude_none=False)
 
         await service.save_configuration(
-            account_id=account_id,
             agent_id=agent_id,
             config=config
         )
@@ -368,11 +355,9 @@ async def save_configuration(
     }
 )
 async def disconnect(
-    account_id: str,
     agent_id: str,
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Disconnect Google Sheets integration.
@@ -381,7 +366,6 @@ async def disconnect(
     """
     try:
         await service.disconnect(
-            account_id=account_id,
             agent_id=agent_id
         )
 
@@ -422,14 +406,14 @@ async def oauth_callback(
     OAuth 2.0 callback endpoint for Google Sheets (fixed URL).
 
     This endpoint handles the OAuth redirect from Google Cloud Console.
-    The account_id and agent_id are extracted from the state parameter.
+    The agent_id is extracted from the state parameter.
 
     Query Parameters:
         code: Authorization code from Google OAuth
-        state: Base64-encoded JSON containing account_id and agent_id
+        state: Base64-encoded JSON containing agent_id
     """
     try:
-        # Decode state to extract account_id and agent_id
+        # Decode state to extract agent_id
         import base64
         import json
 
@@ -437,20 +421,18 @@ async def oauth_callback(
             base64.urlsafe_b64decode(state.encode()).decode()
         )
 
-        account_id = state_data.get("account_id")
         agent_id = state_data.get("agent_id")
 
-        if not account_id or not agent_id:
+        if not agent_id:
             return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid state parameter: missing account_id or agent_id",
+            message="Invalid state parameter: missing agent_id",
             status_code=status.HTTP_400_BAD_REQUEST
         )
 
         # Complete authorization using extracted IDs
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,

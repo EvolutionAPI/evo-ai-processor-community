@@ -11,7 +11,6 @@ from typing import Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, status, Request
 from sqlalchemy.orm import Session
 
-from src.api.dependencies import verify_account_access
 from src.config.database import get_db
 from src.services.global_config_service import get_global_config_service
 from src.utils.response import success_response, error_response, map_status_to_error_code
@@ -21,7 +20,7 @@ from src.schemas.response_models import IntegrationListResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/accounts/{account_id}/agents/{agent_id}/integrations",
+    prefix="/agents/{agent_id}/integrations",
     tags=["integrations"],
 )
 
@@ -146,11 +145,9 @@ async def check_credentials_configured(provider: str, config_service) -> bool:
     }
 )
 async def get_all_configurations(
-    account_id: str,
     agent_id: str,
     request: Request,
     db: Session = Depends(get_db),
-    _: None = Depends(verify_account_access)
 ):
     """
     Get all integration configurations at once, including credentials status.
@@ -175,7 +172,7 @@ async def get_all_configurations(
         )
         
         # Get all integrations from database
-        integrations = await get_agent_integrations(db, agent_id, account_id)
+        integrations = await get_agent_integrations(db, agent_id)
 
         # Organize integrations by provider
         configs: Dict[str, Dict[str, Any]] = {}

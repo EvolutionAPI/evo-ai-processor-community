@@ -128,7 +128,7 @@ class MCPService:
             return result
 
     async def build_lazy_tools(
-        self, mcp_config: Dict[str, Any], db: Session, agent_id: str = None, account_id: str = None
+        self, mcp_config: Dict[str, Any], db: Session, agent_id: str = None
     ) -> List[LazyMCPTool]:
         """Builds a list of lazy proxy tools from multiple MCP servers.
 
@@ -140,7 +140,6 @@ class MCPService:
             mcp_config: Configuration for MCP servers
             db: Database session
             agent_id: Optional agent ID for caching agent-specific tools
-            account_id: Optional account ID for OAuth credential lookup
 
         Returns:
             List of lazy MCP tools
@@ -187,67 +186,62 @@ class MCPService:
                         # Load server configuration from code
                         server_config = None
                         if server_type == "github":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.github import get_github_mcp_config
                                 server_config = await get_github_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
                                 )
                             else:
                                 logger.warning(
-                                    f"GitHub MCP server requires account_id and agent_id. Skipping."
+                                    f"GitHub MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "notion":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.notion import get_notion_mcp_config
                                 server_config = await get_notion_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
                                 )
                             else:
                                 logger.warning(
-                                    f"Notion MCP server requires account_id and agent_id. Skipping."
+                                    f"Notion MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "stripe":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.stripe import get_stripe_mcp_config
                                 server_config = await get_stripe_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
                                 )
                             else:
                                 logger.warning(
-                                    f"Stripe MCP server requires account_id and agent_id. Skipping."
+                                    f"Stripe MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "linear":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.linear import get_linear_mcp_config
                                 server_config = await get_linear_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
                                 )
                             else:
                                 logger.warning(
-                                    f"Linear MCP server requires account_id and agent_id. Skipping."
+                                    f"Linear MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "monday":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.monday import get_monday_mcp_config
-                                logger.info(f"Loading Monday MCP config for agent {agent_id}, account {account_id}")
+                                logger.info(f"Loading Monday MCP config for agent {agent_id}")
                                 server_config = await get_monday_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
@@ -260,28 +254,26 @@ class MCPService:
                                 )
                             else:
                                 logger.warning(
-                                    f"Monday MCP server requires account_id and agent_id. Skipping."
+                                    f"Monday MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "atlassian":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.atlassian.config import get_atlassian_mcp_config
                                 server_config = await get_atlassian_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     db=db
                                 )
                             else:
                                 logger.warning(
-                                    f"Atlassian MCP server requires account_id and agent_id. Skipping."
+                                    f"Atlassian MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "asana":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.asana import get_asana_mcp_config
-                                logger.info(f"Loading Asana MCP config for agent {agent_id}, account {account_id}")
+                                logger.info(f"Loading Asana MCP config for agent {agent_id}")
                                 server_config = await get_asana_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
@@ -294,16 +286,15 @@ class MCPService:
                                 )
                             else:
                                 logger.warning(
-                                    f"Asana MCP server requires account_id and agent_id. Skipping."
+                                    f"Asana MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "hubspot":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.hubspot.config import get_hubspot_mcp_config
-                                logger.info(f"Loading HubSpot MCP config for agent {agent_id}, account {account_id}")
+                                logger.info(f"Loading HubSpot MCP config for agent {agent_id}")
                                 server_config_dict = await get_hubspot_mcp_config(
                                     agent_id=agent_id,
-                                    account_id=account_id,
                                     db=db
                                 )
                                 if server_config_dict:
@@ -319,15 +310,14 @@ class MCPService:
                                     continue
                             else:
                                 logger.warning(
-                                    f"HubSpot MCP server requires account_id and agent_id. Skipping."
+                                    f"HubSpot MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "supabase":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.supabase import get_supabase_mcp_config
-                                logger.info(f"Loading Supabase MCP config for agent {agent_id}, account {account_id}")
+                                logger.info(f"Loading Supabase MCP config for agent {agent_id}")
                                 server_config = await get_supabase_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
@@ -340,15 +330,14 @@ class MCPService:
                                 )
                             else:
                                 logger.warning(
-                                    f"Supabase MCP server requires account_id and agent_id. Skipping."
+                                    f"Supabase MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "canva":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.canva import get_canva_mcp_config
-                                logger.info(f"Loading Canva MCP config for agent {agent_id}, account {account_id}")
+                                logger.info(f"Loading Canva MCP config for agent {agent_id}")
                                 server_config = await get_canva_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
@@ -361,15 +350,14 @@ class MCPService:
                                 )
                             else:
                                 logger.warning(
-                                    f"Canva MCP server requires account_id and agent_id. Skipping."
+                                    f"Canva MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         elif server_type == "paypal":
-                            if account_id and agent_id:
+                            if agent_id:
                                 from src.services.adk.mcp_servers.paypal import get_paypal_mcp_config
-                                logger.info(f"Loading PayPal MCP config for agent {agent_id}, account {account_id}")
+                                logger.info(f"Loading PayPal MCP config for agent {agent_id}")
                                 server_config = await get_paypal_mcp_config(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=server_url,
                                     db=db
@@ -382,7 +370,7 @@ class MCPService:
                                 )
                             else:
                                 logger.warning(
-                                    f"PayPal MCP server requires account_id and agent_id. Skipping."
+                                    f"PayPal MCP server requires agent_id. Skipping."
                                 )
                                 continue
                         else:

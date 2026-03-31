@@ -110,7 +110,6 @@ class PayPalService(MCPOAuthService):
 
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -125,7 +124,6 @@ class PayPalService(MCPOAuthService):
         https://developer.paypal.com/api/rest/#link-getclientidandclientsecret
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
@@ -140,7 +138,7 @@ class PayPalService(MCPOAuthService):
                 base64.urlsafe_b64decode(state.encode()).decode()
             )
 
-            if state_data.get('account_id') != account_id or state_data.get('agent_id') != agent_id:
+            if state_data.get('agent_id') != agent_id:
                 return {
                     "success": False,
                     "error": "Invalid state parameter"
@@ -153,7 +151,7 @@ class PayPalService(MCPOAuthService):
                 logger.info(
                     f"[paypal] Client credentials missing, loading from integration config"
                 )
-                stored_credentials = await self._load_credentials(account_id, agent_id, mcp_url)
+                stored_credentials = await self._load_credentials(agent_id, mcp_url)
                 if stored_credentials and stored_credentials.get("client_id"):
                     self.client_id = stored_credentials.get("client_id")
                     self.client_secret = stored_credentials.get("client_secret")
@@ -170,7 +168,7 @@ class PayPalService(MCPOAuthService):
 
             # Retrieve code_verifier if PKCE was used
             if not code_verifier:
-                code_verifier = await self._load_pkce_verifier(account_id, agent_id, state)
+                code_verifier = await self._load_pkce_verifier(agent_id, state)
 
             # Exchange authorization code for access token using PayPal REST API format
             # PayPal requires Basic Auth (client_id:client_secret in Base64) per documentation
@@ -263,7 +261,7 @@ class PayPalService(MCPOAuthService):
                 )
 
                 # Clean up PKCE verifier
-                await self._delete_pkce_verifier(account_id, agent_id, state)
+                await self._delete_pkce_verifier(agent_id, state)
 
                 # Get user information from PayPal
                 user_data = {}
@@ -301,7 +299,6 @@ class PayPalService(MCPOAuthService):
                 # Store credentials
                 await self._store_credentials(
                     db=db,
-                    account_id=account_id,
                     agent_id=agent_id,
                     mcp_url=mcp_url,
                     access_token=access_token,
@@ -340,7 +337,6 @@ class PayPalService(MCPOAuthService):
 
     async def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         scopes: Optional[list] = None,
     ) -> str:
@@ -352,7 +348,6 @@ class PayPalService(MCPOAuthService):
         https://developer.paypal.com/api/rest/#link-getclientidandclientsecret
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             scopes: Optional list of scopes to request (defaults to discovering from MCP server or empty)
 
@@ -361,7 +356,7 @@ class PayPalService(MCPOAuthService):
         """
         # Ensure client_id is configured (fast path - already set in __init__)
         if not self.client_id:
-            stored_credentials = await self._load_credentials(account_id, agent_id, self.mcp_url)
+            stored_credentials = await self._load_credentials(agent_id, self.mcp_url)
             if stored_credentials and stored_credentials.get("client_id"):
                 self.client_id = stored_credentials.get("client_id")
                 self.client_secret = stored_credentials.get("client_secret")
@@ -380,7 +375,6 @@ class PayPalService(MCPOAuthService):
 
         # Create state parameter with account and agent IDs
         state_data = {
-            "account_id": account_id,
             "agent_id": agent_id,
             "mcp_url": self.mcp_url,
             "timestamp": datetime.utcnow().isoformat()
@@ -402,11 +396,11 @@ class PayPalService(MCPOAuthService):
             if loop.is_running():
                 # If loop is running, create task
                 asyncio.create_task(
-                    self._store_pkce_verifier(account_id, agent_id, state, code_verifier)
+                    self._store_pkce_verifier(agent_id, state, code_verifier)
                 )
             else:
                 # If no loop running, await (shouldn't happen in async context)
-                await self._store_pkce_verifier(account_id, agent_id, state, code_verifier)
+                await self._store_pkce_verifier(agent_id, state, code_verifier)
         except Exception as e:
             # If background task fails, log but don't block - memory storage is sufficient
             logger.debug(f"[paypal] Background PKCE storage failed (non-critical, using memory): {e}")

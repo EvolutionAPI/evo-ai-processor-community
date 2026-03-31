@@ -38,7 +38,6 @@ class ApiKey(BaseModel):
     id: UUID4
     name: str
     provider: str
-    account_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
     is_active: bool
@@ -193,7 +192,6 @@ class AgentBase(BaseModel):
 
 class Agent(AgentBase):
     id: UUID4
-    account_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
     card_url: Optional[str] = None
@@ -244,7 +242,6 @@ class MCPServer(BaseModel):
 
 class AgentFolder(BaseModel):
     id: UUID4
-    account_id: int
     name: str
     description: Optional[str] = None
     created_at: datetime
@@ -292,7 +289,7 @@ class SessionCreateRequest(BaseModel):
     """Schema for creating a session with custom session_id"""
 
     session_id: Optional[str] = Field(None, description="Custom session ID (defaults to UUID if not provided)")
-    user_id: Optional[str] = Field(None, description="User ID (defaults to account_id from auth if not provided)")
+    user_id: Optional[str] = Field(None, description="User ID (defaults to user_id from auth if not provided)")
     metadata: Optional[SessionMetadataCreate] = Field(None, description="Optional session metadata")
 
 class SessionMetadataUpdate(SessionMetadataBase):
@@ -358,7 +355,6 @@ class CustomMCPServer(BaseModel):
     """Schema for custom MCP server response"""
 
     id: UUID4
-    account_id: int
     name: str = Field(..., description="MCP server name")
     description: Optional[str] = Field(None, description="MCP server description")
     url: str = Field(..., description="MCP server URL")
@@ -452,7 +448,6 @@ class CustomTool(BaseModel):
     """Schema for custom tool response"""
 
     id: UUID4
-    account_id: int
     name: str = Field(..., description="Tool name")
     description: Optional[str] = Field(None, description="Tool description")
     method: str = Field(..., description="HTTP method: GET, POST, PUT, DELETE, PATCH")

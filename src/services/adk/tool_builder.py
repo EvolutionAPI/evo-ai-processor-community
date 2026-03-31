@@ -227,7 +227,7 @@ class ToolBuilder:
         return FunctionTool(func=exit_loop)
 
     def build_tools(
-        self, agent_config: Dict[str, Any], db=None, account_id=None, agent_id=None
+        self, agent_config: Dict[str, Any], db=None, agent_id=None
     ) -> List[FunctionTool]:
         """Builds a list of tools based on the provided configuration.
 
@@ -237,12 +237,12 @@ class ToolBuilder:
         self.tools = []
 
         # First, process custom_tool_ids using CustomToolBuilder
-        if agent_config.get("custom_tool_ids") and db and account_id:
+        if agent_config.get("custom_tool_ids") and db:
             from src.services.adk.custom_tools import CustomToolBuilder
 
             custom_tool_builder = CustomToolBuilder()
             custom_tools_from_ids = custom_tool_builder.build_tools(
-                agent_config, db, account_id
+                agent_config, db
             )
             self.tools.extend(custom_tools_from_ids)
             logger.info(
@@ -288,44 +288,33 @@ class ToolBuilder:
             )
 
             try:
-                # Pass account_id if available (from agent config or parameter)
-                tool_account_id = account_id
-
                 # Add transfer_to_human tool if enabled
                 if transfer_to_human_enabled:
                     # Get transfer_rules from agent config
                     transfer_rules = agent_config.get("transfer_rules", [])
                     transfer_tool = create_transfer_to_human_tool(
-                        account_id=tool_account_id,
                         transfer_rules=transfer_rules if isinstance(transfer_rules, list) else []
                     )
                     self.tools.append(transfer_tool)
                     logger.info(
                         f"Added transfer_to_human tool from CRM tools"
-                        + (f" for account {tool_account_id}" if tool_account_id else "")
                         + (f" with {len(transfer_rules)} transfer rules" if transfer_rules else "")
                     )
 
                 # Add send_private_message tool if reminders are enabled
                 if allow_reminders:
-                    private_message_tool = create_send_private_message_tool(
-                        account_id=tool_account_id
-                    )
+                    private_message_tool = create_send_private_message_tool()
                     self.tools.append(private_message_tool)
                     logger.info(
                         f"Added send_private_message tool from CRM tools (reminders enabled)"
-                        + (f" for account {tool_account_id}" if tool_account_id else "")
                     )
 
                 # Add update_contact tool if enabled
                 if allow_contact_edit:
-                    update_contact_tool = create_update_contact_tool(
-                        account_id=tool_account_id
-                    )
+                    update_contact_tool = create_update_contact_tool()
                     self.tools.append(update_contact_tool)
                     logger.info(
                         f"Added update_contact tool from CRM tools"
-                        + (f" for account {tool_account_id}" if tool_account_id else "")
                     )
 
                 # Add pipeline_manipulation tool if enabled
@@ -333,13 +322,11 @@ class ToolBuilder:
                     # Get pipeline_rules from agent config
                     pipeline_rules = agent_config.get("pipeline_rules", [])
                     pipeline_tool = create_pipeline_manipulation_tool(
-                        account_id=tool_account_id,
                         pipeline_rules=pipeline_rules if isinstance(pipeline_rules, list) else []
                     )
                     self.tools.append(pipeline_tool)
                     logger.info(
                         f"Added pipeline_manipulation tool from CRM tools"
-                        + (f" for account {tool_account_id}" if tool_account_id else "")
                         + (f" with {len(pipeline_rules)} pipeline rules" if pipeline_rules else "")
                     )
 
@@ -405,7 +392,6 @@ class ToolBuilder:
                     # Add check_availability tool with configs from agent.config.integrations
                     self.tools.append(
                         create_check_availability_tool(
-                            account_id=account_id,
                             agent_id=effective_agent_id,
                             calendar_config=google_calendar_config,
                             credentials_config=google_calendar_credentials,
@@ -416,7 +402,6 @@ class ToolBuilder:
                     # Add create_event tool with configs from agent.config.integrations
                     self.tools.append(
                         create_calendar_event_tool(
-                            account_id=account_id,
                             agent_id=effective_agent_id,
                             calendar_config=google_calendar_config,
                             credentials_config=google_calendar_credentials,
@@ -426,7 +411,7 @@ class ToolBuilder:
 
                     logger.info(
                         f"Added Google Calendar tools (check_availability, create_event) "
-                        f"for account {account_id}, agent {effective_agent_id}"
+                        f"for agent {effective_agent_id}"
                     )
             except Exception as e:
                 logger.error(f"Error creating Google Calendar tools: {e}")
@@ -458,7 +443,6 @@ class ToolBuilder:
                     # Add read_spreadsheet tool
                     self.tools.append(
                         create_read_spreadsheet_tool(
-                            account_id=account_id,
                             agent_id=effective_agent_id,
                             sheets_config=google_sheets_config,
                             credentials_config=google_sheets_credentials,
@@ -469,7 +453,6 @@ class ToolBuilder:
                     # Add write_spreadsheet tool
                     self.tools.append(
                         create_write_spreadsheet_tool(
-                            account_id=account_id,
                             agent_id=effective_agent_id,
                             sheets_config=google_sheets_config,
                             credentials_config=google_sheets_credentials,
@@ -480,7 +463,6 @@ class ToolBuilder:
                     # Add append_spreadsheet tool
                     self.tools.append(
                         create_append_spreadsheet_tool(
-                            account_id=account_id,
                             agent_id=effective_agent_id,
                             sheets_config=google_sheets_config,
                             credentials_config=google_sheets_credentials,
@@ -491,7 +473,6 @@ class ToolBuilder:
                     # Add create_spreadsheet tool
                     self.tools.append(
                         create_create_spreadsheet_tool(
-                            account_id=account_id,
                             agent_id=effective_agent_id,
                             sheets_config=google_sheets_config,
                             credentials_config=google_sheets_credentials,
@@ -501,7 +482,7 @@ class ToolBuilder:
 
                     logger.info(
                         f"Added Google Sheets tools (read, write, append, create) "
-                        f"for account {account_id}, agent {effective_agent_id}"
+                        f"for agent {effective_agent_id}"
                     )
             except Exception as e:
                 logger.error(f"Error creating Google Sheets tools: {e}")

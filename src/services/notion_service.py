@@ -1,29 +1,20 @@
 """
 Notion MCP OAuth and API integration service.
-
 This service uses the MCP OAuth Protected Resource discovery pattern:
 1. Discover OAuth requirements from Notion MCP server
 2. Perform OAuth flow using discovered authorization server
 3. Store tokens for use in MCP server headers
-
 This follows the standard MCP OAuth pattern for Notion MCP.
 """
-
 import logging
 from typing import Optional, Dict, Any
 import httpx
-
 from src.services.mcp_oauth_service import MCPOAuthService
-
 logger = logging.getLogger(__name__)
-
-
 class NotionService(MCPOAuthService):
     """Service for Notion MCP OAuth and API operations."""
-
     # Default Notion MCP URL
     DEFAULT_MCP_URL = "https://mcp.notion.com/mcp"
-
     def __init__(
         self,
         redirect_uri: str,
@@ -35,7 +26,6 @@ class NotionService(MCPOAuthService):
     ):
         """
         Initialize Notion MCP service.
-
         Args:
             redirect_uri: OAuth redirect URI
             core_service_url: Base URL for evo-ai-core-service API
@@ -45,7 +35,6 @@ class NotionService(MCPOAuthService):
             mcp_url: Optional custom MCP URL (defaults to Notion MCP)
         """
         effective_mcp_url = mcp_url or self.DEFAULT_MCP_URL
-
         super().__init__(
             mcp_url=effective_mcp_url,
             redirect_uri=redirect_uri,
@@ -55,12 +44,9 @@ class NotionService(MCPOAuthService):
             client_id=client_id,
             client_secret=client_secret
         )
-
         logger.info(f"NotionService initialized with MCP URL: {effective_mcp_url}")
-
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -68,21 +54,16 @@ class NotionService(MCPOAuthService):
     ) -> Dict[str, Any]:
         """
         Complete OAuth authorization flow and store tokens.
-
         Overrides parent method to add Notion-specific user info retrieval.
-
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
-
         Returns:
             Dictionary with success status, username, and user info
         """
         # Call parent method to handle OAuth flow
         result = await super().complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,
@@ -94,7 +75,7 @@ class NotionService(MCPOAuthService):
             try:
                 access_token = None
                 # Get access token from stored credentials
-                credentials = await self._load_credentials(account_id, agent_id)
+                credentials = await self._load_credentials(agent_id)
                 if credentials:
                     access_token = credentials.get("access_token")
                 
@@ -118,7 +99,6 @@ class NotionService(MCPOAuthService):
                         
                         # Update stored credentials with user info
                         await self._store_credentials(
-                            account_id=account_id,
                             agent_id=agent_id,
                             mcp_url=self.mcp_url,
                             access_token=access_token,
@@ -133,24 +113,18 @@ class NotionService(MCPOAuthService):
                 # Don't fail the authorization if user info fetch fails
         
         return result
-
     async def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         scopes: Optional[list] = None,
     ) -> str:
         """
         Generate OAuth 2.0 authorization URL for Notion MCP.
-
         First discovers OAuth requirements from the MCP server, then generates
         the authorization URL using the discovered authorization server and scopes.
-
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             scopes: Optional list of scopes to request (defaults to all supported scopes)
-
         Returns:
             Authorization URL for user to visit
         """
@@ -158,11 +132,8 @@ class NotionService(MCPOAuthService):
         if not self._oauth_metadata:
             logger.info("Discovering OAuth requirements from Notion MCP server...")
             await self.discover_oauth_requirements()
-
         # Generate authorization URL using parent method
         return await super().generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
             scopes=scopes
         )
-

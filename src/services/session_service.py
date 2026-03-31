@@ -85,10 +85,10 @@ async def get_sessions_by_account(
             # Get all agents accessible to the user (owned + shared)
             from src.services.agent_service import get_accessible_agents_for_account
 
-            agents = get_accessible_agents_for_account(db, user_email, user_id)
+            agents = get_accessible_agents_for_account(db, user_email)
         else:
-            # Fallback to owned agents only if no user email provided
-            agents = get_agents_by_account(db, user_id)
+            # Fallback to all agents if no user email provided
+            agents = get_agents_by_account(db)
 
         sessions = []
         for agent in agents:
@@ -561,9 +561,6 @@ def get_execution_metrics(
         query = db.query(ExecutionMetrics)
 
         if user_id:
-            query = query.join(ExecutionMetrics.agent).filter(
-                Agent.account_id == user_id
-            )
             query = query.filter(ExecutionMetrics.user_id == user_id)
 
         if session_id:

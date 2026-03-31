@@ -180,11 +180,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Check if we have user information in request state
         if hasattr(request.state, "current_user") and request.state.current_user:
             user_id = request.state.current_user.get("user_id")
-            account_id = request.state.current_user.get("account_id")
-            
-            if account_id:
-                return f"account_{account_id}"
-            elif user_id:
+            if user_id:
                 return f"user_{user_id}"
         
         # Check authorization header for JWT

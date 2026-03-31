@@ -480,7 +480,7 @@ class LlmAgentBuilder:
         # Get custom tools from the configuration
         custom_tools = []
         custom_tools = self.tool_builder.build_tools(
-            agent.config, self.db, agent.account_id, str(agent.id)
+            agent.config, self.db, str(agent.id)
         )
 
         # Get MCP tools from the configuration
@@ -603,7 +603,7 @@ class LlmAgentBuilder:
             # Use lazy loading for MCP tools with agent ID for caching
             logger.info(f"Building lazy MCP tools for agent {agent.name} (ID: {agent.id})")
             mcp_tools = await self.mcp_service.build_lazy_tools(
-                modified_config, self.db, str(agent.id), str(agent.account_id)
+                modified_config, self.db, str(agent.id)
             )
             logger.info(
                 f"Added {len(mcp_tools)} lazy MCP tools for agent {agent.name}. "
@@ -871,7 +871,6 @@ class LlmAgentBuilder:
             
             # Add compress memory tool
             compress_memory_tool = await create_compress_memory_tool(
-                account_id=str(agent.account_id),
                 memory_base_config_id=str(memory_base_config_id) if memory_base_config_id else None,
             )
             memory_tools.append(compress_memory_tool)

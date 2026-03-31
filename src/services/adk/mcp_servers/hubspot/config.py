@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 async def get_hubspot_mcp_config(
     agent_id: str,
-    account_id: Optional[str] = None,
     db: Optional[Session] = None
 ) -> Optional[Dict[str, Any]]:
     """
@@ -29,7 +28,6 @@ async def get_hubspot_mcp_config(
 
     Args:
         agent_id: Agent ID
-        account_id: Account ID (optional)
         db: Database session (optional, will create if not provided)
 
     Returns:
@@ -41,7 +39,7 @@ async def get_hubspot_mcp_config(
             return None
 
         # Fetch all integrations for this agent
-        integrations = await get_agent_integrations(db, agent_id, account_id)
+        integrations = await get_agent_integrations(db, agent_id)
 
         # Find HubSpot integration
         hubspot_integration = None
@@ -111,13 +109,12 @@ async def get_hubspot_mcp_config(
         # Refresh token if needed
         logger.info(
             f"HubSpot refresh check: should_refresh={should_refresh}, "
-            f"has_refresh_token={bool(refresh_token)}, "
-            f"account_id={account_id}"
+            f"has_refresh_token={bool(refresh_token)}"
         )
         
         if should_refresh and refresh_token:
             logger.info(
-                f"Attempting to refresh HubSpot token for agent {agent_id}, account {account_id}"
+                f"Attempting to refresh HubSpot token for agent {agent_id}"
             )
             try:
                 from src.services.hubspot_service import HubSpotService
@@ -151,7 +148,6 @@ async def get_hubspot_mcp_config(
                     
                     # Attempt to refresh token
                     new_access_token = await hubspot_service.refresh_access_token(
-                        account_id=account_id or "",
                         agent_id=agent_id,
                         mcp_url=mcp_url,
                         db=db

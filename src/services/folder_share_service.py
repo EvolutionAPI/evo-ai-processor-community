@@ -39,17 +39,15 @@ logger = logging.getLogger(__name__)
 def check_folder_access(
     db: Session,
     folder_id: uuid.UUID,
-    user_account_id: Optional[int] = None,
     user_email: Optional[str] = None,
     required_permission: str = "read"
 ) -> bool:
     """Check if a user has access to a folder"""
     try:
-        # Check if user owns the folder
-        if user_email and user_account_id:
+        # Check if folder exists
+        if user_email:
             folder = db.query(AgentFolder).filter(
                 AgentFolder.id == folder_id,
-                AgentFolder.account_id == user_account_id
             ).first()
             if folder:
                 return True

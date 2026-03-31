@@ -15,7 +15,6 @@ logger = setup_logger(__name__)
 
 
 async def get_paypal_mcp_config(
-    account_id: str,
     agent_id: str,
     mcp_url: Optional[str] = None,
     db: Optional[Session] = None
@@ -25,7 +24,6 @@ async def get_paypal_mcp_config(
 
     Args:
         agent_id: Agent ID
-        account_id: Account ID
         mcp_url: Optional custom MCP URL (defaults to PayPal MCP)
         db: Optional database session for direct database access
 
@@ -45,7 +43,7 @@ async def get_paypal_mcp_config(
     # If database session is provided, fetch integration config directly
     if db:
         try:
-            integrations = await get_agent_integrations(db, agent_id, account_id)
+            integrations = await get_agent_integrations(db, agent_id)
             
             # Find PayPal integration
             paypal_integration = None

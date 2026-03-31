@@ -45,7 +45,6 @@ class ExternalAgentBuilder:
             integration_config = await get_agent_integration_by_provider(
                 self.db,
                 root_agent.id,
-                root_agent.account_id,
                 provider,
             )
 
@@ -76,7 +75,6 @@ class ExternalAgentBuilder:
                 provider=provider,
                 integration_config=integration_config,
                 db=self.db,
-                account_id=str(root_agent.account_id),
                 sub_agents=sub_agents,
             )
 

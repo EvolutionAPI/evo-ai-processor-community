@@ -90,20 +90,16 @@ class PermissionResponse(BaseModel):
     """Response model for permission validation"""
     has_permission: bool
     user_id: Optional[str] = None
-    account_id: Optional[str] = None
 
 class UserContext(BaseModel):
     """User context structure"""
     user_id: str
-    account_id: str
     email: str
     name: str
     display_name: Optional[str] = None
     availability: str
     mfa_enabled: bool
     confirmed: bool
-    accounts: List[Dict[str, Any]]
-    account: Dict[str, Any]
     role: Optional[Dict[str, Any]] = None
     type: Optional[str] = None
     token_info: Optional[TokenInfo] = None

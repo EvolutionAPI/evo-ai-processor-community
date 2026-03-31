@@ -559,7 +559,6 @@ class MCPOAuthService:
 
     async def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         scopes: Optional[List[str]] = None,
     ) -> str:
@@ -567,7 +566,6 @@ class MCPOAuthService:
         Generate OAuth 2.0 authorization URL with PKCE support (RFC 7636).
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             scopes: Optional list of scopes to request. If not provided, uses all scopes_supported from discovery.
 
@@ -599,7 +597,7 @@ class MCPOAuthService:
 
             # Try to load stored client credentials from integration config first
             # Note: db is not available in generate_authorization_url, so this will use HTTP
-            stored_credentials = await self._load_credentials(account_id, agent_id, self.mcp_url, db=None)
+            stored_credentials = await self._load_credentials(agent_id, self.mcp_url, db=None)
 
             if stored_credentials and stored_credentials.get("client_id") and stored_credentials.get("client_id").strip():
                 # Use stored client credentials from previous registration
@@ -639,8 +637,7 @@ class MCPOAuthService:
                         )
                         try:
                             await self._store_client_credentials(
-                                account_id, 
-                                agent_id, 
+                                agent_id,
                                 self.mcp_url,
                                 token_endpoint_auth_method=self._token_endpoint_auth_method,
                                 db=None  # Not available in generate_authorization_url
@@ -757,7 +754,6 @@ class MCPOAuthService:
 
         # Create state parameter with account and agent IDs
         state_data = {
-            "account_id": account_id,
             "agent_id": agent_id,
             "mcp_url": self.mcp_url,
             "timestamp": datetime.utcnow().isoformat()
@@ -774,7 +770,7 @@ class MCPOAuthService:
             f"[{self.provider_name}] Storing PKCE verifier before generating authorization URL. "
             f"state_length={len(state)}, code_verifier_length={len(code_verifier)}"
         )
-        await self._store_pkce_verifier(account_id, agent_id, state, code_verifier, db=None)
+        await self._store_pkce_verifier(agent_id, state, code_verifier, db=None)
         logger.info(
             f"[{self.provider_name}] PKCE verifier stored successfully. "
             f"Will now store client credentials (which should preserve pkce_verifiers)"
@@ -834,7 +830,6 @@ class MCPOAuthService:
         # IMPORTANT: This is called AFTER _store_pkce_verifier, so it will preserve pkce_verifiers
         try:
             await self._store_client_credentials(
-                account_id,
                 agent_id,
                 self.mcp_url,
                 token_endpoint_auth_method=self._token_endpoint_auth_method,
@@ -866,7 +861,6 @@ class MCPOAuthService:
 
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -877,7 +871,6 @@ class MCPOAuthService:
         Complete OAuth authorization flow and store tokens.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
@@ -892,7 +885,7 @@ class MCPOAuthService:
                 base64.urlsafe_b64decode(state.encode()).decode()
             )
 
-            if state_data.get('account_id') != account_id or state_data.get('agent_id') != agent_id:
+            if state_data.get('agent_id') != agent_id:
                 return {
                     "success": False,
                     "error": "Invalid state parameter"
@@ -949,7 +942,7 @@ class MCPOAuthService:
                     f"client_secret={'present' if self.client_secret else 'missing'}, "
                     f"has_db={db is not None}"
                 )
-                stored_credentials = await self._load_credentials(account_id, agent_id, mcp_url, db=db)
+                stored_credentials = await self._load_credentials(agent_id, mcp_url, db=db)
                 logger.info(
                     f"[{self.provider_name}] Loaded credentials result: "
                     f"found={stored_credentials is not None}, "
@@ -1039,7 +1032,7 @@ class MCPOAuthService:
             if not code_verifier:
                 # Try to load from storage (callback scenario)
                 try:
-                    code_verifier = await self._load_pkce_verifier(account_id, agent_id, state, db=db)
+                    code_verifier = await self._load_pkce_verifier(agent_id, state, db=db)
                     if code_verifier:
                         logger.info(f"[{self.provider_name}] Found code_verifier in storage")
                 except Exception as load_error:
@@ -1270,7 +1263,6 @@ class MCPOAuthService:
                         f"  - Token length: {len(access_token)}\n"
                         f"  - Token preview: {token_preview}\n"
                         f"  - Token starts with: {access_token[:20]}\n"
-                        f"  - Account ID: {account_id}\n"
                         f"  - Agent ID: {agent_id}\n"
                         f"  - MCP URL: {mcp_url}"
                     )
@@ -1312,7 +1304,7 @@ class MCPOAuthService:
                     logger.debug("Removed code_verifier from memory")
 
                 # Also remove from persistent storage
-                await self._delete_pkce_verifier(account_id, agent_id, state)
+                await self._delete_pkce_verifier(agent_id, state)
 
             # Get user information (provider-specific)
             # This is optional and provider-specific
@@ -1332,7 +1324,6 @@ class MCPOAuthService:
                 try:
                     logger.info(
                         f"💾 [{self.provider_name}] Storing OAuth credentials to database:\n"
-                        f"  - Account ID: {account_id}\n"
                         f"  - Agent ID: {agent_id}\n"
                         f"  - Has access_token: True\n"
                         f"  - Has refresh_token: {bool(refresh_token)}\n"
@@ -1342,7 +1333,6 @@ class MCPOAuthService:
                     )
                     
                     await self._store_credentials(
-                        account_id=account_id,
                         agent_id=agent_id,
                         mcp_url=mcp_url,
                         access_token=access_token,
@@ -1371,7 +1361,6 @@ class MCPOAuthService:
             else:
                 logger.error(
                     f"❌ [{self.provider_name}] OAuth login FAILED - No access_token to store\n"
-                    f"  - Account ID: {account_id}\n"
                     f"  - Agent ID: {agent_id}\n"
                     f"  - Token exchange may have failed"
                 )
@@ -1417,7 +1406,6 @@ class MCPOAuthService:
 
     async def _store_pkce_verifier(
         self,
-        account_id: str,
         agent_id: str,
         state: str,
         code_verifier: str,
@@ -1426,7 +1414,7 @@ class MCPOAuthService:
         """Store PKCE code_verifier for retrieval during callback."""
         try:
             # Load existing config
-            existing_config = await self._load_credentials(account_id, agent_id, self.mcp_url, db=db) or {}
+            existing_config = await self._load_credentials(agent_id, self.mcp_url, db=db) or {}
 
             # Add/update pkce_verifiers dict
             pkce_verifiers = existing_config.get("pkce_verifiers", {})
@@ -1437,7 +1425,7 @@ class MCPOAuthService:
             if db is not None:
                 try:
                     from src.services.agent_service import upsert_agent_integration
-                    success = await upsert_agent_integration(db, agent_id, account_id, self.provider_name, existing_config)
+                    success = await upsert_agent_integration(db, agent_id, self.provider_name, existing_config)
                     if success:
                         logger.info(
                             f"Stored PKCE verifier for {self.provider_name} directly to database "
@@ -1471,14 +1459,13 @@ class MCPOAuthService:
 
     async def _load_pkce_verifier(
         self,
-        account_id: str,
         agent_id: str,
         state: str,
         db: Optional[Any] = None
     ) -> Optional[str]:
         """Load PKCE code_verifier from storage."""
         try:
-            config = await self._load_credentials(account_id, agent_id, self.mcp_url, db=db)
+            config = await self._load_credentials(agent_id, self.mcp_url, db=db)
             if config and "pkce_verifiers" in config:
                 pkce_verifiers = config["pkce_verifiers"]
                 logger.info(
@@ -1508,13 +1495,12 @@ class MCPOAuthService:
 
     async def _delete_pkce_verifier(
         self,
-        account_id: str,
         agent_id: str,
         state: str
     ) -> None:
         """Delete PKCE code_verifier from storage after use."""
         try:
-            config = await self._load_credentials(account_id, agent_id, self.mcp_url)
+            config = await self._load_credentials(agent_id, self.mcp_url)
             if config and "pkce_verifiers" in config:
                 pkce_verifiers = config["pkce_verifiers"]
                 if state in pkce_verifiers:
@@ -1534,7 +1520,6 @@ class MCPOAuthService:
 
     async def _store_client_credentials(
         self,
-        account_id: str,
         agent_id: str,
         mcp_url: str,
         token_endpoint_auth_method: str = "none",
@@ -1542,7 +1527,7 @@ class MCPOAuthService:
     ) -> None:
         """Store only client credentials (client_id/secret) without access token."""
         # Load existing config first to preserve pkce_verifiers and other fields
-        existing_config = await self._load_credentials(account_id, agent_id, mcp_url, db=db) or {}
+        existing_config = await self._load_credentials(agent_id, mcp_url, db=db) or {}
         
         # IMPORTANT: Also check memory for pkce_verifiers that may not have been saved yet
         # This handles the case where _store_pkce_verifier was called but hasn't completed HTTP save
@@ -1600,11 +1585,11 @@ class MCPOAuthService:
         if db is not None:
             try:
                 from src.services.agent_service import upsert_agent_integration
-                success = await upsert_agent_integration(db, agent_id, account_id, self.provider_name, config)
+                success = await upsert_agent_integration(db, agent_id, self.provider_name, config)
                 if success:
                     logger.info(
                         f"Successfully stored client credentials for {self.provider_name} "
-                        f"directly to database (agent: {agent_id}, account: {account_id})"
+                        f"directly to database (agent: {agent_id})"
                     )
                     return
                 else:
@@ -1622,7 +1607,7 @@ class MCPOAuthService:
             response.raise_for_status()
             logger.info(
                 f"Successfully stored client credentials for {self.provider_name} "
-                f"via HTTP API (agent: {agent_id}, account: {account_id})"
+                f"via HTTP API (agent: {agent_id})"
             )
         except httpx.HTTPStatusError as e:
             logger.error(
@@ -1641,7 +1626,6 @@ class MCPOAuthService:
 
     async def _store_credentials(
         self,
-        account_id: str,
         agent_id: str,
         mcp_url: str,
         access_token: str,
@@ -1689,18 +1673,18 @@ class MCPOAuthService:
 
         logger.info(
             f"Storing credentials for {self.provider_name} integration. "
-            f"agent_id={agent_id}, account_id={account_id}"
+            f"agent_id={agent_id}"
         )
         
         # Prefer direct database access if db session is available
         if db is not None:
             try:
                 from src.services.agent_service import upsert_agent_integration
-                success = await upsert_agent_integration(db, agent_id, account_id, self.provider_name, config)
+                success = await upsert_agent_integration(db, agent_id, self.provider_name, config)
                 if success:
                     logger.info(
                         f"Successfully stored credentials for {self.provider_name} integration "
-                        f"directly to database (agent: {agent_id}, account: {account_id})"
+                        f"directly to database (agent: {agent_id})"
                     )
                     return
                 else:
@@ -1736,7 +1720,7 @@ class MCPOAuthService:
             response.raise_for_status()
             logger.info(
                 f"Successfully stored credentials for {self.provider_name} integration "
-                f"via HTTP API (agent: {agent_id}, account: {account_id})"
+                f"via HTTP API (agent: {agent_id})"
             )
         except httpx.HTTPStatusError as e:
             logger.error(
@@ -1756,7 +1740,6 @@ class MCPOAuthService:
 
     async def _load_credentials(
         self,
-        account_id: str,
         agent_id: str,
         mcp_url: Optional[str] = None,
         db: Optional[Any] = None
@@ -1768,9 +1751,9 @@ class MCPOAuthService:
                 from src.services.agent_service import get_agent_integrations
                 logger.info(
                     f"[{self.provider_name}] Loading credentials from database "
-                    f"(agent: {agent_id}, account: {account_id})"
+                    f"(agent: {agent_id})"
                 )
-                integrations = await get_agent_integrations(db, agent_id, account_id)
+                integrations = await get_agent_integrations(db, agent_id)
                 logger.info(
                     f"[{self.provider_name}] Found {len(integrations)} integrations in database. "
                     f"Providers: {[i.get('provider') for i in integrations]}"
@@ -1836,7 +1819,6 @@ class MCPOAuthService:
 
     async def refresh_access_token(
         self,
-        account_id: str,
         agent_id: str,
         mcp_url: Optional[str] = None,
         db: Optional[Any] = None
@@ -1851,7 +1833,6 @@ class MCPOAuthService:
         4. Update stored credentials with new tokens (handles refresh token rotation)
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             mcp_url: Optional MCP URL (if different from default)
             db: Optional database session for direct DB access
@@ -1863,12 +1844,12 @@ class MCPOAuthService:
             effective_mcp_url = mcp_url or self.mcp_url
             
             # Load credentials
-            credentials = await self._load_credentials(account_id, agent_id, effective_mcp_url, db=db)
-            
+            credentials = await self._load_credentials(agent_id, effective_mcp_url, db=db)
+
             if not credentials:
                 logger.warning(
                     f"[{self.provider_name}] No credentials found for refresh. "
-                    f"agent_id={agent_id}, account_id={account_id}"
+                    f"agent_id={agent_id}"
                 )
                 return None
             
@@ -1951,7 +1932,7 @@ class MCPOAuthService:
             
             # Load client credentials if needed
             if not self.client_id:
-                stored_credentials = await self._load_credentials(account_id, agent_id, effective_mcp_url, db=db)
+                stored_credentials = await self._load_credentials(agent_id, effective_mcp_url, db=db)
                 if stored_credentials and stored_credentials.get("client_id"):
                     self.client_id = stored_credentials.get("client_id")
                     self.client_secret = stored_credentials.get("client_secret")
@@ -2065,7 +2046,6 @@ class MCPOAuthService:
                 
                 # Store updated credentials
                 await self._store_credentials(
-                    account_id=account_id,
                     agent_id=agent_id,
                     mcp_url=effective_mcp_url,
                     access_token=new_access_token,
@@ -2101,7 +2081,6 @@ class MCPOAuthService:
 
     async def get_mcp_headers(
         self,
-        account_id: str,
         agent_id: str,
         mcp_url: Optional[str] = None,
         db: Optional[Any] = None
@@ -2112,7 +2091,6 @@ class MCPOAuthService:
         Automatically refreshes token if expired or near expiration.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             mcp_url: Optional MCP URL (if different from default)
             db: Optional database session for direct DB access
@@ -2124,18 +2102,16 @@ class MCPOAuthService:
         
         logger.info(
             f"🔍 [{self.provider_name}] Getting MCP headers:\n"
-            f"  - Account ID: {account_id}\n"
             f"  - Agent ID: {agent_id}\n"
             f"  - MCP URL: {effective_mcp_url}"
         )
-        
+
         # Load credentials
-        credentials = await self._load_credentials(account_id, agent_id, effective_mcp_url, db=db)
-        
+        credentials = await self._load_credentials(agent_id, effective_mcp_url, db=db)
+
         if not credentials or not credentials.get("access_token"):
             logger.error(
                 f"❌ [{self.provider_name}] MCP OAuth credentials not found!\n"
-                f"  - Account ID: {account_id}\n"
                 f"  - Agent ID: {agent_id}\n"
                 f"  - Has credentials: {bool(credentials)}\n"
                 f"  - Has access_token: {bool(credentials.get('access_token') if credentials else False)}\n"
@@ -2200,7 +2176,7 @@ class MCPOAuthService:
             )
         
         # Try to refresh token if needed
-        access_token = await self.refresh_access_token(account_id, agent_id, effective_mcp_url, db=db)
+        access_token = await self.refresh_access_token(agent_id, effective_mcp_url, db=db)
         
         # If refresh failed, use existing token (may be expired, but MCP server will reject it)
         if not access_token:
@@ -2238,7 +2214,6 @@ class MCPOAuthService:
 
     async def disconnect(
         self,
-        account_id: str,
         agent_id: str,
         mcp_url: Optional[str] = None
     ) -> bool:
