@@ -38,27 +38,6 @@ def _extract_conversation_id_from_metadata(tool_context: Optional[ToolContext]) 
     return None
 
 
-def _extract_account_id_from_metadata(tool_context: Optional[ToolContext]) -> Optional[str]:
-    """Extract account_id from tool_context metadata."""
-    if not tool_context or not hasattr(tool_context, 'state'):
-        return None
-
-    state = tool_context.state
-    evoai_crm_data = state.get("evoai_crm_data", {})
-    if isinstance(evoai_crm_data, dict):
-        account = evoai_crm_data.get("account", {})
-        if isinstance(account, dict):
-            account_id = account.get("id")
-            if account_id:
-                return str(account_id)
-
-    for key in ["account_id", "accountId"]:
-        if key in state:
-            return str(state[key])
-
-    return None
-
-
 def _extract_contact_id_from_metadata(tool_context: Optional[ToolContext]) -> Optional[str]:
     """Extract contact_id from tool_context metadata."""
     if not tool_context or not hasattr(tool_context, 'state'):
@@ -102,7 +81,6 @@ def _extract_pipeline_rules_from_metadata(tool_context: Optional[ToolContext]) -
 
 
 def create_pipeline_manipulation_tool(
-    account_id: Optional[str] = None,
     pipeline_rules: Optional[List[Dict[str, Any]]] = None
 ) -> FunctionTool:
     """Create the pipeline_manipulation tool for managing pipeline items and tasks.
@@ -114,7 +92,6 @@ def create_pipeline_manipulation_tool(
     - Update and complete tasks
 
     Args:
-        account_id: Optional account ID. If provided, will be used as default.
         pipeline_rules: Optional list of pipeline rules from agent config.
                        Each rule should have: pipelineId, pipelineName, stages, allowTasks, allowServices, etc.
     """
@@ -128,7 +105,6 @@ def create_pipeline_manipulation_tool(
         conversation_id: Optional[str] = None,
         pipeline_id: Optional[str] = None,
         stage_id: Optional[str] = None,
-        account_id_param: Optional[str] = None,
         notes: Optional[str] = None,
         task_title: Optional[str] = None,
         task_description: Optional[str] = None,
@@ -171,7 +147,6 @@ def create_pipeline_manipulation_tool(
             conversation_id: ID of the conversation (optional, auto-extracted from context)
             pipeline_id: ID of the pipeline (optional if only one pipeline is configured)
             stage_id: ID of the stage to move to (required for move_to_stage)
-            account_id_param: Account ID (optional, auto-extracted from context)
             notes: Optional notes for the action
             task_title: Title for the task (required for create_task)
             task_description: Description for the task (optional)
@@ -193,19 +168,6 @@ def create_pipeline_manipulation_tool(
         """
         try:
             # Extract IDs from metadata if not provided
-            effective_account_id = account_id_param or account_id
-            if not effective_account_id and tool_context:
-                effective_account_id = _extract_account_id_from_metadata(tool_context)
-                if effective_account_id:
-                    logger.info(f"Extracted account_id from metadata: {effective_account_id}")
-
-            if not effective_account_id:
-                return {
-                    "status": "error",
-                    "message": "account_id is required. It should be automatically extracted from the conversation context.",
-                    "action": action,
-                }
-
             effective_contact_id = contact_id
             if not effective_contact_id and tool_context:
                 effective_contact_id = _extract_contact_id_from_metadata(tool_context)
@@ -247,7 +209,6 @@ def create_pipeline_manipulation_tool(
             if action == 'add_to_pipeline':
                 return await _add_to_pipeline(
                     client=client,
-                    account_id=effective_account_id,
                     pipeline_id=effective_pipeline_id,
                     contact_id=effective_contact_id,
                     conversation_id=effective_conversation_id,
@@ -259,7 +220,6 @@ def create_pipeline_manipulation_tool(
             elif action == 'move_to_stage':
                 return await _move_to_stage(
                     client=client,
-                    account_id=effective_account_id,
                     pipeline_id=effective_pipeline_id,
                     conversation_id=effective_conversation_id,
                     stage_id=stage_id,
@@ -270,7 +230,6 @@ def create_pipeline_manipulation_tool(
             elif action == 'create_task':
                 return await _create_task(
                     client=client,
-                    account_id=effective_account_id,
                     pipeline_id=effective_pipeline_id,
                     conversation_id=effective_conversation_id,
                     task_title=task_title,
@@ -284,7 +243,6 @@ def create_pipeline_manipulation_tool(
             elif action == 'update_task':
                 return await _update_task(
                     client=client,
-                    account_id=effective_account_id,
                     pipeline_id=effective_pipeline_id,
                     task_id=task_id,
                     task_title=task_title,
@@ -297,7 +255,6 @@ def create_pipeline_manipulation_tool(
             elif action == 'complete_task':
                 return await _complete_task(
                     client=client,
-                    account_id=effective_account_id,
                     pipeline_id=effective_pipeline_id,
                     task_id=task_id,
                 )
@@ -388,7 +345,6 @@ def create_pipeline_manipulation_tool(
 
 async def _add_to_pipeline(
     client: EvoCrmClient,
-    account_id: str,
     pipeline_id: str,
     contact_id: Optional[str],
     conversation_id: Optional[str],
@@ -438,7 +394,6 @@ async def _add_to_pipeline(
         endpoint = f"/pipelines/{pipeline_id}/pipeline_items"
         response = await client.post(
             endpoint=endpoint,
-            account_id=account_id,
             json_data=request_body,
         )
 
@@ -474,7 +429,6 @@ async def _add_to_pipeline(
 
 async def _move_to_stage(
     client: EvoCrmClient,
-    account_id: str,
     pipeline_id: str,
     conversation_id: Optional[str],
     stage_id: Optional[str],
@@ -520,7 +474,6 @@ async def _move_to_stage(
 
         response = await client.post(
             endpoint=endpoint,
-            account_id=account_id,
             json_data=request_body,
         )
 
@@ -554,7 +507,6 @@ async def _move_to_stage(
 
 async def _create_task(
     client: EvoCrmClient,
-    account_id: str,
     pipeline_id: str,
     conversation_id: Optional[str],
     task_title: Optional[str],
@@ -596,7 +548,6 @@ async def _create_task(
         items_endpoint = f"/pipelines/{pipeline_id}/pipeline_items"
         items_response = await client.get(
             endpoint=items_endpoint,
-            account_id=account_id,
         )
 
         # Find the pipeline item for this conversation
@@ -646,7 +597,6 @@ async def _create_task(
 
         response = await client.post(
             endpoint=endpoint,
-            account_id=account_id,
             json_data=request_body,
         )
 
@@ -679,7 +629,6 @@ async def _create_task(
 
 async def _update_task(
     client: EvoCrmClient,
-    account_id: str,
     pipeline_id: str,
     task_id: Optional[str],
     task_title: Optional[str],
@@ -723,7 +672,6 @@ async def _update_task(
 
         response = await client.put(
             endpoint=endpoint,
-            account_id=account_id,
             json_data=request_body,
         )
 
@@ -755,7 +703,6 @@ async def _update_task(
 
 async def _complete_task(
     client: EvoCrmClient,
-    account_id: str,
     pipeline_id: str,
     task_id: Optional[str],
 ) -> Dict[str, Any]:
@@ -775,7 +722,6 @@ async def _complete_task(
 
         response = await client.post(
             endpoint=endpoint,
-            account_id=account_id,
             json_data={},
         )
 

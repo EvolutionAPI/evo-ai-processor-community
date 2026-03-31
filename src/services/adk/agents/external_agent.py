@@ -33,7 +33,6 @@ class ExternalAgent(BaseAgent):
     provider: str
     integration_config: Dict[str, Any]
     db: Session
-    account_id: str
 
     def __init__(
         self,
@@ -41,7 +40,6 @@ class ExternalAgent(BaseAgent):
         provider: str,
         integration_config: Dict[str, Any],
         db: Session,
-        account_id: str,
         sub_agents: list = [],
         **kwargs,
     ):
@@ -53,7 +51,6 @@ class ExternalAgent(BaseAgent):
             provider: Provider name ('flowise', 'n8n', 'typebot', 'dify', 'openai')
             integration_config: Configuration from evo_core_agent_integrations.config
             db: Database session
-            account_id: Account ID
             sub_agents: List of sub-agents to be executed after the External agent
         """
         super().__init__(
@@ -61,7 +58,6 @@ class ExternalAgent(BaseAgent):
             provider=provider,
             integration_config=integration_config,
             db=db,
-            account_id=account_id,
             sub_agents=sub_agents,
             **kwargs,
         )

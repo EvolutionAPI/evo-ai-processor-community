@@ -62,17 +62,13 @@ class HttpMemoryService(BaseMemoryService):
         self.base_url = (base_url or settings.CORE_SERVICE_URL).rstrip("/")
         self.auth_token = auth_token
         self.token_type = token_type
-        # Store last used account_id and memory_base_config_id for search operations
-        self._last_account_id: Optional[Union[int, str, uuid.UUID]] = None
+        # Store last used memory_base_config_id for search operations
         self._last_memory_base_config_id: Optional[Union[str, uuid.UUID]] = None
         logger.info(f"HttpMemoryService initialized with base_url: {self.base_url}")
 
-    def _get_headers(self, account_id: Optional[Union[int, str, uuid.UUID]] = None) -> Dict[str, str]:
+    def _get_headers(self) -> Dict[str, str]:
         """Build headers for HTTP requests.
         
-        Args:
-            account_id: Optional account ID (int, str UUID, or UUID) to include in account-id header
-            
         Returns:
             Dictionary with headers
         """
@@ -97,33 +93,6 @@ class HttpMemoryService(BaseMemoryService):
             elif self.token_type == "service_token":
                 headers["X-Service-Token"] = self.auth_token
         
-        # Add account-id header if account_id provided
-        if account_id:
-            # Convert account_id to UUID format for knowledge service
-            if isinstance(account_id, uuid.UUID):
-                client_uuid = account_id
-            elif isinstance(account_id, str):
-                # Try to parse as UUID string first
-                try:
-                    client_uuid = uuid.UUID(account_id)
-                except ValueError:
-                    # If not a valid UUID string, create deterministic UUID5
-                    namespace = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')  # DNS namespace
-                    client_uuid = uuid.uuid5(namespace, account_id)
-            elif isinstance(account_id, int):
-                # Try to create UUID from integer (works if account_id fits in UUID int range)
-                try:
-                    client_uuid = uuid.UUID(int=account_id)
-                except (ValueError, OverflowError):
-                    # Fallback: create UUID5 from account_id string (deterministic)
-                    namespace = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')  # DNS namespace
-                    client_uuid = uuid.uuid5(namespace, str(account_id))
-            else:
-                # Fallback: convert to string and create UUID5
-                namespace = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')  # DNS namespace
-                client_uuid = uuid.uuid5(namespace, str(account_id))
-            headers["account-id"] = str(client_uuid)
-        
         return headers
 
     async def add_session_to_memory(
@@ -132,7 +101,6 @@ class HttpMemoryService(BaseMemoryService):
         db: Optional[Any] = None,
         short_term_max_messages: Optional[int] = None,
         compression_interval: Optional[int] = None,
-        account_id: Optional[Union[int, str, uuid.UUID]] = None,
         memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> None:
         """Add session to memory via HTTP.
@@ -142,7 +110,6 @@ class HttpMemoryService(BaseMemoryService):
             db: Database session (not used in HTTP implementation)
             short_term_max_messages: Maximum messages in short-term memory before compression
             compression_interval: Compress every N messages to medium-term memory
-            account_id: Account ID (int, str UUID, or UUID) - will be sent in account-id header
             memory_base_config_id: Optional UUID of the memory base configuration to use
         """
         try:
@@ -154,17 +121,7 @@ class HttpMemoryService(BaseMemoryService):
                 logger.warning(f"Cannot add session to memory: missing app_name or user_id")
                 return
             
-            # Use provided account_id, or try to extract from session state
-            if account_id is None:
-                if hasattr(session, "state") and session.state:
-                    account_id = session.state.get("account_id") or session.state.get("client_id")
-            
-            # account_id is required - log error if not found
-            if account_id is None:
-                logger.error(f"Cannot add session to memory: account_id not provided and not found in session state. app_name={app_name}, user_id={user_id}")
-                return
-            
-            logger.debug(f"Using account_id={account_id} (type={type(account_id)}) for memory storage")
+
             
             # Get session content (messages, etc.) - extract all messages from the session events
             # The session.events contains all events including user and agent messages
@@ -250,8 +207,8 @@ class HttpMemoryService(BaseMemoryService):
             if compression_interval is not None:
                 payload["compression_interval"] = compression_interval
             
-            # Build headers with account_id and memory_base_config_id
-            headers = self._get_headers(account_id=account_id)
+            # Build headers with memory_base_config_id
+            headers = self._get_headers()
             
             # Add memory_base_config_id header if provided
             if memory_base_config_id:
@@ -261,7 +218,7 @@ class HttpMemoryService(BaseMemoryService):
                     headers["x-memory-base-config-id"] = str(memory_base_config_id)
                 logger.debug(f"Using memory base config ID: {memory_base_config_id}")
             
-            logger.info(f"Adding session to memory via HTTP: app={app_name}, user={user_id}, account_id={account_id}, memory_base_config_id={memory_base_config_id}")
+            logger.info(f"Adding session to memory via HTTP: app={app_name}, user={user_id}, memory_base_config_id={memory_base_config_id}")
             
             response = await http_client.do_post_json(
                 url=url,
@@ -285,7 +242,6 @@ class HttpMemoryService(BaseMemoryService):
         user_id: str,
         role: str,
         content: str,
-        account_id: Optional[Union[int, str, uuid.UUID]] = None,
         memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
         short_term_max_messages: Optional[int] = None,
         compression_interval: Optional[int] = None,
@@ -297,7 +253,6 @@ class HttpMemoryService(BaseMemoryService):
             user_id: User ID
             role: Role of the message ('user' or 'agent')
             content: Content of the message
-            account_id: Account ID (int, str UUID, or UUID) - will be sent in account-id header
             memory_base_config_id: Optional UUID of the memory base configuration to use
             short_term_max_messages: Maximum messages before removing oldest (FIFO)
             compression_interval: Compress every N messages into medium-term memory (optional)
@@ -307,15 +262,9 @@ class HttpMemoryService(BaseMemoryService):
                 logger.warning(f"Cannot add event to memory: missing required fields")
                 return
             
-            if account_id is None:
-                logger.error(f"Cannot add event to memory: account_id not provided")
-                return
-            
-            # Store account_id and memory_base_config_id for later use in search
-            self._last_account_id = account_id
             self._last_memory_base_config_id = memory_base_config_id
             
-            logger.debug(f"Adding event to memory: app={app_name}, user={user_id}, role={role}, account_id={account_id}")
+            logger.debug(f"Adding event to memory: app={app_name}, user={user_id}, role={role}")
             
             # Call knowledge service HTTP API
             url = f"{self.base_url}/memory/event"
@@ -334,8 +283,8 @@ class HttpMemoryService(BaseMemoryService):
             if compression_interval is not None:
                 payload["compression_interval"] = compression_interval
             
-            # Build headers with account_id and memory_base_config_id
-            headers = self._get_headers(account_id=account_id)
+            # Build headers with memory_base_config_id
+            headers = self._get_headers()
             
             # Add memory_base_config_id header if provided
             if memory_base_config_id:
@@ -369,7 +318,6 @@ class HttpMemoryService(BaseMemoryService):
         query: str,
         max_results: int = 10,
         db: Optional[Any] = None,
-        account_id: Optional[Union[int, str, uuid.UUID]] = None,
         memory_base_config_id: Optional[Union[str, uuid.UUID]] = None,
     ) -> SearchMemoryResponse:
         """Search memory via HTTP.
@@ -380,24 +328,13 @@ class HttpMemoryService(BaseMemoryService):
             query: Search query
             max_results: Maximum number of results
             db: Database session (not used in HTTP implementation)
-            account_id: Optional account ID (will use last stored if not provided)
             memory_base_config_id: Optional memory base config ID (will use last stored if not provided)
             
         Returns:
             SearchMemoryResponse with search results
         """
         try:
-            # Use provided account_id or fall back to last stored value
-            effective_account_id = account_id or self._last_account_id
             effective_memory_base_config_id = memory_base_config_id or self._last_memory_base_config_id
-            
-            if effective_account_id is None:
-                logger.warning(f"Cannot search memory: account_id not provided and not stored. app={app_name}, user={user_id}")
-                return SearchMemoryResponse(
-                    memories=[],
-                    total=0,
-                    query=query
-                )
             
             # Call knowledge service HTTP API
             url = f"{self.base_url}/memory/search"
@@ -408,15 +345,15 @@ class HttpMemoryService(BaseMemoryService):
                 "max_results": max_results
             }
             
-            # Build headers with account_id and memory_base_config_id
-            headers = self._get_headers(account_id=effective_account_id)
+            # Build headers with memory_base_config_id
+            headers = self._get_headers()
             if effective_memory_base_config_id:
                 if isinstance(effective_memory_base_config_id, uuid.UUID):
                     headers["x-memory-base-config-id"] = str(effective_memory_base_config_id)
                 else:
                     headers["x-memory-base-config-id"] = str(effective_memory_base_config_id)
             
-            logger.info(f"Searching memory via HTTP: app={app_name}, user={user_id}, query='{query}', account_id={effective_account_id}, memory_base_config_id={effective_memory_base_config_id}")
+            logger.info(f"Searching memory via HTTP: app={app_name}, user={user_id}, query='{query}', memory_base_config_id={effective_memory_base_config_id}")
             
             response_data = await http_client.do_post_json(
                 url=url,

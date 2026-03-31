@@ -1,29 +1,20 @@
 """
 Atlassian MCP OAuth and API integration service.
-
 This service uses the MCP OAuth Protected Resource discovery pattern:
 1. Discover OAuth requirements from Atlassian MCP server
 2. Perform OAuth flow using discovered authorization server
 3. Store tokens for use in MCP server headers
-
 This follows the standard MCP OAuth pattern for Atlassian MCP.
 """
-
 import logging
 from typing import Optional, Dict, Any
 import httpx
-
 from src.services.mcp_oauth_service import MCPOAuthService
-
 logger = logging.getLogger(__name__)
-
-
 class AtlassianService(MCPOAuthService):
     """Service for Atlassian MCP OAuth and API operations."""
-
     # Default Atlassian MCP URL
     DEFAULT_MCP_URL = "https://mcp.atlassian.com/mcp"
-
     def __init__(
         self,
         redirect_uri: str,
@@ -35,7 +26,6 @@ class AtlassianService(MCPOAuthService):
     ):
         """
         Initialize Atlassian MCP service.
-
         Args:
             redirect_uri: OAuth redirect URI
             core_service_url: Base URL for evo-ai-core-service API
@@ -45,7 +35,6 @@ class AtlassianService(MCPOAuthService):
             mcp_url: Optional custom MCP URL (defaults to Atlassian MCP)
         """
         effective_mcp_url = mcp_url or self.DEFAULT_MCP_URL
-
         super().__init__(
             mcp_url=effective_mcp_url,
             redirect_uri=redirect_uri,
@@ -55,12 +44,9 @@ class AtlassianService(MCPOAuthService):
             client_id=client_id,
             client_secret=client_secret
         )
-
         logger.info(f"AtlassianService initialized with MCP URL: {effective_mcp_url}")
-
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -68,22 +54,17 @@ class AtlassianService(MCPOAuthService):
     ) -> Dict[str, Any]:
         """
         Complete OAuth authorization flow and store tokens.
-
         Overrides parent method to add Atlassian-specific user info retrieval.
-
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
             db: Optional database session for direct DB access
-
         Returns:
             Dictionary with success status, username, and user info
         """
         # Call parent method to handle OAuth flow
         result = await super().complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,
@@ -95,7 +76,7 @@ class AtlassianService(MCPOAuthService):
             try:
                 access_token = None
                 # Get access token from stored credentials
-                credentials = await self._load_credentials(account_id, agent_id)
+                credentials = await self._load_credentials(agent_id)
                 if credentials:
                     access_token = credentials.get("access_token")
                 
@@ -119,7 +100,6 @@ class AtlassianService(MCPOAuthService):
                         
                         # Update stored credentials with user info
                         await self._store_credentials(
-                            account_id=account_id,
                             agent_id=agent_id,
                             mcp_url=self.mcp_url,
                             access_token=access_token,
@@ -133,24 +113,18 @@ class AtlassianService(MCPOAuthService):
                 # Don't fail the authorization if user info fetch fails
         
         return result
-
     async def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         scopes: Optional[list] = None,
     ) -> str:
         """
         Generate OAuth 2.0 authorization URL for Atlassian MCP.
-
         First discovers OAuth requirements from the MCP server, then generates
         the authorization URL using the discovered authorization server and scopes.
-
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             scopes: Optional list of scopes to request (defaults to all supported scopes)
-
         Returns:
             Authorization URL for user to visit
         """
@@ -158,11 +132,8 @@ class AtlassianService(MCPOAuthService):
         if not self._oauth_metadata:
             logger.info("Discovering OAuth requirements from Atlassian MCP server...")
             await self.discover_oauth_requirements()
-
         # Generate authorization URL using parent method
         return await super().generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
             scopes=scopes
         )
-

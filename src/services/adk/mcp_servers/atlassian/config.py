@@ -16,7 +16,6 @@ default_url = "https://mcp.atlassian.com/mcp"
 
 
 async def get_atlassian_mcp_config(
-    account_id: str,
     agent_id: str,
     db: Optional[Session] = None
 ) -> Dict[str, Any]:
@@ -24,7 +23,6 @@ async def get_atlassian_mcp_config(
     Get Atlassian MCP server configuration for an agent.
 
     Args:
-        account_id: Account ID
         agent_id: Agent ID
         db: Optional database session for direct database access
 
@@ -46,7 +44,7 @@ async def get_atlassian_mcp_config(
             from src.services.agent_service import get_agent_integrations
 
             # Get agent integrations
-            integrations = await get_agent_integrations(db, agent_id, account_id)
+            integrations = await get_agent_integrations(db, agent_id)
 
             # Find Atlassian integration
             atlassian_integration = None

@@ -137,7 +137,7 @@ class StreamingRunner:
             # Save user message to memory individually (FIFO) before processing
             if memory_service and hasattr(memory_service, "add_event_to_memory"):
                 try:
-                    # Get agent from database to extract account_id and config
+                    # Get agent from database to extract config
                     from src.services.agent_service import get_agent
                     agent = await get_agent(self.db, agent_id)
                     
@@ -146,10 +146,8 @@ class StreamingRunner:
                     memory_base_config_id = None
                     short_term_max_messages = None
                     compression_interval = None
-                    account_id = None
-                    
+
                     if agent:
-                        account_id = agent.account_id
                         if agent.config:
                             agent_config = agent.config if isinstance(agent.config, dict) else {}
                             if isinstance(agent_config, dict):
@@ -157,21 +155,20 @@ class StreamingRunner:
                                 memory_base_config_id = agent_config.get("memory_base_config_id")
                                 short_term_max_messages = agent_config.get("memory_short_term_max_messages")
                                 compression_interval = agent_config.get("memory_medium_term_compression_interval")
-                    
+
                     # Only save to memory if load_memory is enabled
                     if load_memory_enabled:
                         # Combine message with transcribed texts
                         user_content = message
                         if transcribed_texts:
                             user_content += "\n\n" + "\n\n".join(transcribed_texts)
-                        
-                        if user_content.strip() and account_id:
+
+                        if user_content.strip():
                             await memory_service.add_event_to_memory(
                                 app_name=agent_id,
                                 user_id=effective_user_id,
                                 role="user",
                                 content=user_content,
-                                account_id=account_id,
                                 memory_base_config_id=memory_base_config_id,
                                 short_term_max_messages=short_term_max_messages,
                                 compression_interval=compression_interval,
@@ -195,24 +192,22 @@ class StreamingRunner:
                             
                             if isinstance(memory_service, HttpMemoryService):
                                 memory_base_config_id = agent_config.get("memory_base_config_id")
-                                account_id = agent.account_id
-                                
+
                                 # Call /memory/load endpoint directly (preload mode - empty query returns medium_term summaries)
                                 try:
                                     base_url = settings.KNOWLEDGE_SERVICE_URL.rstrip("/")
                                     url = f"{base_url}/memory/load"
-                                    
+
                                     params = {
                                         "app_name": agent_id,
                                         "user_id": effective_user_id,
                                         "query": "",  # Empty query loads medium_term summaries
                                         "max_results": 10,
                                     }
-                                    
+
                                     headers = {
                                         "Content-Type": "application/json",
                                         "Accept": "application/json",
-                                        "account-id": str(account_id),
                                     }
                                     
                                     # Add service token for service-to-service authentication
@@ -287,23 +282,21 @@ class StreamingRunner:
                                 knowledge_tags = agent_config.get("knowledge_tags")
                                 knowledge_base_config_id = agent_config.get("knowledge_base_config_id")
                                 knowledge_max_results = agent_config.get("knowledge_max_results", 5)
-                                account_id = agent.account_id
-                                
+
                                 # Call /knowledge/search endpoint directly for preload
                                 base_url = settings.KNOWLEDGE_SERVICE_URL.rstrip("/")
                                 url = f"{base_url}/knowledge/search"
-                                
+
                                 # Use a general query for preload context
                                 payload = {
                                     "query": "general context and information",
                                     "tags": knowledge_tags or [],
                                     "max_results": knowledge_max_results,
                                 }
-                                
+
                                 headers = {
                                     "Content-Type": "application/json",
                                     "Accept": "application/json",
-                                    "account-id": str(account_id),
                                 }
                                 
                                 # Add service token for service-to-service authentication
@@ -456,10 +449,8 @@ class StreamingRunner:
                                         memory_base_config_id = None
                                         short_term_max_messages = None
                                         compression_interval = None
-                                        account_id = None
-                                        
+
                                         if agent:
-                                            account_id = agent.account_id
                                             if agent.config:
                                                 agent_config = agent.config if isinstance(agent.config, dict) else {}
                                                 if isinstance(agent_config, dict):
@@ -467,18 +458,17 @@ class StreamingRunner:
                                                     memory_base_config_id = agent_config.get("memory_base_config_id")
                                                     short_term_max_messages = agent_config.get("memory_short_term_max_messages")
                                                     compression_interval = agent_config.get("memory_medium_term_compression_interval")
-                                        
+
                                         # Only save to memory if load_memory is enabled
-                                        if load_memory_enabled and account_id:
+                                        if load_memory_enabled:
                                             # Determine role (agent response)
                                             role = "agent"
-                                            
+
                                             await memory_service.add_event_to_memory(
                                                 app_name=agent_id,
                                                 user_id=effective_user_id,
                                                 role=role,
                                                 content=event_text,
-                                                account_id=account_id,
                                                 memory_base_config_id=memory_base_config_id,
                                                 short_term_max_messages=short_term_max_messages,
                                                 compression_interval=compression_interval,

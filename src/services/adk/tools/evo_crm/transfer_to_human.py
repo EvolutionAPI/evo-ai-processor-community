@@ -50,36 +50,6 @@ def _extract_conversation_id_from_metadata(tool_context: Optional[ToolContext]) 
     return None
 
 
-def _extract_account_id_from_metadata(tool_context: Optional[ToolContext]) -> Optional[str]:
-    """Extract account_id from tool_context metadata.
-    
-    Looks for account_id in various possible locations:
-    - evoai_crm_data.account.id
-    - account_id (direct)
-    - accountId (camelCase)
-    """
-    if not tool_context or not hasattr(tool_context, 'state'):
-        return None
-    
-    state = tool_context.state
-    
-    # Try evoai_crm_data
-    evoai_crm_data = state.get("evoai_crm_data", {})
-    if isinstance(evoai_crm_data, dict):
-        account = evoai_crm_data.get("account", {})
-        if isinstance(account, dict):
-            account_id = account.get("id")
-            if account_id:
-                return str(account_id)
-    
-    # Try direct keys
-    for key in ["account_id", "accountId"]:
-        if key in state:
-            return str(state[key])
-    
-    return None
-
-
 def _extract_transfer_rules_from_metadata(tool_context: Optional[ToolContext]) -> List[Dict[str, Any]]:
     """Extract transfer_rules from tool_context metadata."""
     if not tool_context or not hasattr(tool_context, 'state'):
@@ -98,17 +68,14 @@ def _extract_transfer_rules_from_metadata(tool_context: Optional[ToolContext]) -
 
 
 def create_transfer_to_human_tool(
-    account_id: Optional[str] = None,
     transfer_rules: Optional[List[Dict[str, Any]]] = None
 ) -> FunctionTool:
     """Create the transfer_to_human tool for transferring conversations to human agents.
-    
+
     This tool transfers a conversation to a human agent, following transfer rules
     and considering agent availability and workload.
-    
+
     Args:
-        account_id: Optional account ID. If provided, will be used as default.
-                   If not provided, must be passed as parameter when calling the tool.
         transfer_rules: Optional list of transfer rules from agent config.
                        Each rule should have: transferTo, userId, teamId, instructions, etc.
     """
@@ -119,7 +86,6 @@ def create_transfer_to_human_tool(
     async def transfer_to_human(
         assignee_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
-        account_id_param: Optional[str] = None,
         team_id: Optional[str] = None,
         reason: Optional[str] = None,
         tool_context: Optional[ToolContext] = None,
@@ -148,7 +114,6 @@ def create_transfer_to_human_tool(
         assignee_id: The ID of the human agent to assign the conversation to (optional if transfer_rules are configured)
         conversation_id: The ID of the conversation to transfer (optional,
                         will be automatically extracted from conversation context)
-        account_id_param: The account ID (optional, will be automatically extracted from context)
         team_id: Optional team ID to assign the conversation to a team instead (optional if transfer_rules are configured)
         reason: Optional reason for the transfer (for logging and context)
         tool_context: The tool context containing session information (automatically provided)
@@ -213,20 +178,6 @@ def create_transfer_to_human_tool(
                     "conversation_id": effective_conversation_id,
                 }
             
-            # Extract account_id from metadata if not provided
-            effective_account_id = account_id_param or account_id
-            if not effective_account_id and tool_context:
-                effective_account_id = _extract_account_id_from_metadata(tool_context)
-                if effective_account_id:
-                    logger.info(f"Extracted account_id from metadata: {effective_account_id}")
-            
-            if not effective_account_id:
-                return {
-                    "status": "error",
-                    "message": "account_id is required. It should be automatically extracted from the conversation context, but if not available, please provide it explicitly.",
-                    "conversation_id": effective_conversation_id,
-                }
-            
             logger.info(
                 f"Transferring conversation {effective_conversation_id} to agent {effective_assignee_id}"
                 + (f" (team: {effective_team_id})" if effective_team_id else "")
@@ -248,17 +199,15 @@ def create_transfer_to_human_tool(
             try:
                 response = await client.post(
                     endpoint=endpoint,
-                    account_id=effective_account_id,
                     json_data=request_body,
                 )
-                
+
                 # After successful assignment, change conversation status to 'open' if it's 'pending'
                 # This ensures the conversation is visible to human agents
                 try:
                     status_endpoint = f"/conversations/{effective_conversation_id}/toggle_status"
                     await client.post(
                         endpoint=status_endpoint,
-                        account_id=effective_account_id,
                         json_data={"status": "open"},
                     )
                     logger.info(f"Changed conversation {effective_conversation_id} status to 'open' after transfer")
@@ -366,7 +315,6 @@ def create_transfer_to_human_tool(
     Args:
         conversation_id: The ID of the conversation to transfer (optional, auto-extracted)
         assignee_id: The ID of the human agent to assign to (optional if transfer_rules configured)
-        account_id_param: The account ID (optional, auto-extracted)
         team_id: Optional team ID to assign to a team instead (optional if transfer_rules configured)
         reason: Optional reason for transfer (for logging)
     

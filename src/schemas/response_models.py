@@ -44,7 +44,7 @@ class UsageSummaryResponse(BaseModel):
 
 
 class UsageSummaryDictResponse(BaseModel):
-    """Usage summary dictionary response (keyed by account_id)"""
+    """Usage summary dictionary response"""
     pass  # This will be Dict[str, UsageSummaryResponse] in practice
 
 

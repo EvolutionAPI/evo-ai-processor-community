@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.services.google_calendar_service import GoogleCalendarService
-from src.api.dependencies import verify_account_access
 from src.config.database import get_db
 from src.utils.response import success_response, error_response, map_status_to_error_code
 from src.schemas.responses import SuccessResponse, ErrorResponse
@@ -29,7 +28,7 @@ from src.schemas.response_models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/accounts/{account_id}/agents/{agent_id}/integrations/google-calendar",
+    prefix="/agents/{agent_id}/integrations/google-calendar",
     tags=["google-calendar"],
 )
 
@@ -201,11 +200,9 @@ async def get_google_calendar_service(
     }
 )
 async def generate_authorization(
-    account_id: str,
     agent_id: str,
     request: AuthorizationRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Generate OAuth 2.0 authorization URL for Google Calendar.
@@ -214,7 +211,6 @@ async def generate_authorization(
     """
     try:
         url = service.generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
             email=request.email
         )
@@ -244,12 +240,10 @@ async def generate_authorization(
     }
 )
 async def complete_authorization(
-    account_id: str,
     agent_id: str,
     request: CallbackRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
     db: Session = Depends(get_db),
-    _: None = Depends(verify_account_access)
 ):
     """
     Complete OAuth 2.0 authorization flow.
@@ -259,7 +253,6 @@ async def complete_authorization(
     """
     try:
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=request.code,
             state=request.state,
@@ -308,11 +301,9 @@ async def complete_authorization(
     }
 )
 async def get_calendars(
-    account_id: str,
     agent_id: str,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
     db: Session = Depends(get_db),
-    _: None = Depends(verify_account_access)
 ):
     """
     Get list of available Google Calendars.
@@ -321,7 +312,6 @@ async def get_calendars(
     """
     try:
         calendars = await service.get_calendars(
-            account_id=account_id,
             agent_id=agent_id,
             db=db
         )
@@ -358,11 +348,9 @@ async def get_calendars(
     }
 )
 async def save_configuration(
-    account_id: str,
     agent_id: str,
     request: ConfigurationRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Save Google Calendar configuration.
@@ -373,7 +361,6 @@ async def save_configuration(
         config = request.dict(exclude_none=False)
 
         await service.save_configuration(
-            account_id=account_id,
             agent_id=agent_id,
             config=config
         )
@@ -402,10 +389,8 @@ async def save_configuration(
     }
 )
 async def disconnect(
-    account_id: str,
     agent_id: str,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Disconnect Google Calendar integration.
@@ -414,7 +399,6 @@ async def disconnect(
     """
     try:
         await service.disconnect(
-            account_id=account_id,
             agent_id=agent_id
         )
 
@@ -444,11 +428,9 @@ async def disconnect(
     }
 )
 async def check_availability(
-    account_id: str,
     agent_id: str,
     request: AvailabilityRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Check calendar availability for a time range.
@@ -457,7 +439,6 @@ async def check_availability(
     """
     try:
         result = await service.check_availability(
-            account_id=account_id,
             agent_id=agent_id,
             calendar_id=request.calendarId,
             start=request.start,
@@ -502,11 +483,9 @@ async def check_availability(
     }
 )
 async def create_event(
-    account_id: str,
     agent_id: str,
     request: CreateEventRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Create a new calendar event.
@@ -515,7 +494,6 @@ async def create_event(
     """
     try:
         result = await service.create_event(
-            account_id=account_id,
             agent_id=agent_id,
             calendar_id=request.calendarId,
             summary=request.summary,
@@ -574,14 +552,14 @@ async def oauth_callback(
     OAuth 2.0 callback endpoint for Google Calendar (fixed URL).
 
     This endpoint handles the OAuth redirect from Google Cloud Console.
-    The account_id and agent_id are extracted from the state parameter.
+    The agent_id is extracted from the state parameter.
 
     Query Parameters:
         code: Authorization code from Google OAuth
-        state: Base64-encoded JSON containing account_id and agent_id
+        state: Base64-encoded JSON containing agent_id
     """
     try:
-        # Decode state to extract account_id and agent_id
+        # Decode state to extract agent_id
         import base64
         import json
 
@@ -589,20 +567,18 @@ async def oauth_callback(
             base64.urlsafe_b64decode(state.encode()).decode()
         )
 
-        account_id = state_data.get("account_id")
         agent_id = state_data.get("agent_id")
 
-        if not account_id or not agent_id:
+        if not agent_id:
             return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid state parameter: missing account_id or agent_id",
+            message="Invalid state parameter: missing agent_id",
             status_code=status.HTTP_400_BAD_REQUEST
         )
 
         # Complete authorization using extracted IDs
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,

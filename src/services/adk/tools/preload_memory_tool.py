@@ -38,14 +38,12 @@ logger = setup_logger(__name__)
 
 
 async def create_preload_memory_tool(
-    account_id: str,
     memory_base_config_id: Optional[str] = None,
     default_max_results: int = 10,
 ) -> FunctionTool:
-    """Factory function to create a memory preload tool for a specific account
+    """Factory function to create a memory preload tool
 
     Args:
-        account_id: The account ID to preload memory for
         memory_base_config_id: Optional UUID of the memory base configuration to use
         default_max_results: Default maximum number of results to return
     """
@@ -53,7 +51,7 @@ async def create_preload_memory_tool(
         max_results: Optional[int] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> dict:
-        """Memory preload tool with embedded account_id and config_id
+        """Memory preload tool with embedded config_id
         
         This tool automatically loads medium-term memory summaries at the start of a conversation.
         It loads summaries without requiring a search query, providing context from previous conversations.
@@ -94,7 +92,7 @@ async def create_preload_memory_tool(
                 }
             
             logger.info(
-                f"Preloading memory for account {account_id}, app '{app_name}', user '{user_id}'"
+                f"Preloading memory for app '{app_name}', user '{user_id}'"
                 + (f" using config {memory_base_config_id}" if memory_base_config_id else "")
             )
 
@@ -111,10 +109,9 @@ async def create_preload_memory_tool(
                 "max_results": effective_max_results,
             }
             
-            # Build headers with account_id, memory_base_config_id, and service token
+            # Build headers with memory_base_config_id and service token
             headers = {
                 "Accept": "application/json",
-                "account-id": str(account_id),
             }
             
             # Add service token for service-to-service authentication
@@ -195,7 +192,7 @@ async def create_preload_memory_tool(
     
     # Set function name and docstring for better tool description
     preload_memory_with_client.__name__ = "preload_memory"
-    preload_memory_with_client.__doc__ = f"""Preload medium-term memory summaries from previous conversations for account {account_id}.
+    preload_memory_with_client.__doc__ = f"""Preload medium-term memory summaries from previous conversations.
     
     This tool automatically loads memory summaries at the start of a conversation to provide context.
     It loads medium-term summaries (compressed memories) without requiring a search query.

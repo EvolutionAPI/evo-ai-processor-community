@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.services.asana_service import AsanaService
-from src.api.dependencies import verify_account_access
 from src.config.database import get_db
 from src.utils.response import success_response, error_response, map_status_to_error_code
 from src.schemas.responses import SuccessResponse, ErrorResponse
@@ -30,7 +29,7 @@ from src.schemas.response_models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/accounts/{account_id}/agents/{agent_id}/integrations/asana",
+    prefix="/agents/{agent_id}/integrations/asana",
     tags=["asana"],
 )
 
@@ -127,10 +126,8 @@ async def get_asana_service_optional(
     }
 )
 async def discover_oauth_requirements(
-    account_id: str,
     agent_id: str,
     service: AsanaService = Depends(get_asana_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Discover OAuth requirements from Asana MCP server.
@@ -161,10 +158,8 @@ async def discover_oauth_requirements(
     }
 )
 async def generate_authorization(
-    account_id: str,
     agent_id: str,
     service: AsanaService = Depends(get_asana_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Generate OAuth 2.0 authorization URL for Asana MCP.
@@ -176,7 +171,6 @@ async def generate_authorization(
     """
     try:
         url = await service.generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id
         )
         return success_response(
@@ -203,12 +197,10 @@ async def generate_authorization(
     }
 )
 async def complete_authorization(
-    account_id: str,
     agent_id: str,
     request: CallbackRequest,
     db: Session = Depends(get_db),
     service: AsanaService = Depends(get_asana_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Complete OAuth authorization flow and store tokens.
@@ -217,7 +209,6 @@ async def complete_authorization(
     """
     try:
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=request.code,
             state=request.state,
@@ -267,11 +258,9 @@ async def complete_authorization(
     }
 )
 async def get_configuration(
-    account_id: str,
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[AsanaService] = Depends(get_asana_service_optional),
-    _: None = Depends(verify_account_access)
 ):
     """Get Asana integration configuration. Creates default config if not found."""
     try:
@@ -280,7 +269,7 @@ async def get_configuration(
         
         # Try to load from database first (preferred method)
         load_from_service = service._load_credentials if service else None
-        config = await get_integration_config(db, account_id, agent_id, "asana", load_from_service=load_from_service)
+        config = await get_integration_config(db, agent_id, "asana", load_from_service=load_from_service)
         
         if not config:
             # Return default disconnected state
@@ -329,11 +318,9 @@ async def get_configuration(
     }
 )
 async def discover_tools(
-    account_id: str,
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[AsanaService] = Depends(get_asana_service_optional),
-    _: None = Depends(verify_account_access)
 ):
     """Discover available MCP tools from Asana using stored access_token."""
     from src.api.mcp_integration_base import discover_tools_endpoint
@@ -342,7 +329,7 @@ async def discover_tools(
     load_from_service = service._load_credentials if service else None
     
     discovery_tools = await discover_tools_endpoint(
-        account_id, agent_id, "asana", "https://mcp.asana.com/mcp", db, load_from_service=load_from_service
+        agent_id, "asana", "https://mcp.asana.com/mcp", db, load_from_service=load_from_service
     )
     return success_response(data=discovery_tools, message="Tools discovered successfully")
 
@@ -357,19 +344,17 @@ async def discover_tools(
     }
 )
 async def update_configuration(
-    account_id: str,
     agent_id: str,
     config: Dict[str, Any],
     db: Session = Depends(get_db),
     service: AsanaService = Depends(get_asana_service),
-    _: None = Depends(verify_account_access)
 ):
     """Save Asana integration configuration."""
     try:
         # Load existing configuration from database (preferred) or service (fallback)
         from src.api.mcp_integration_base import get_integration_config
         
-        stored_config = await get_integration_config(db, account_id, agent_id, "asana", load_from_service=service._load_credentials)
+        stored_config = await get_integration_config(db, agent_id, "asana", load_from_service=service._load_credentials)
         
         if not stored_config:
             return error_response(
@@ -397,7 +382,7 @@ async def update_configuration(
         from src.services.agent_service import upsert_agent_integration
         
         success = await upsert_agent_integration(
-            db, agent_id, account_id, "asana", updated_config
+            db, agent_id, "asana", updated_config
         )
         
         if not success:
@@ -439,14 +424,12 @@ async def update_configuration(
 )
 async def disconnect(
     request: Request,
-    account_id: str,
     agent_id: str,
     service: AsanaService = Depends(get_asana_service),
-    _: None = Depends(verify_account_access)
 ):
     """Disconnect Asana integration."""
     try:
-        success = await service.disconnect(account_id, agent_id)
+        success = await service.disconnect(agent_id)
         return success_response(
             data={"success": success},
             message="Operation completed successfully"
@@ -481,27 +464,26 @@ async def oauth_callback(
     OAuth 2.0 callback endpoint for Asana MCP (fixed URL).
 
     This endpoint handles the OAuth redirect from Asana.
-    The account_id and agent_id are extracted from the state parameter.
+    The agent_id is extracted from the state parameter.
 
     Query Parameters:
         code: Authorization code from Asana OAuth
-        state: Base64-encoded JSON containing account_id, agent_id, and mcp_url
+        state: Base64-encoded JSON containing agent_id and mcp_url
     """
     try:
-        # Decode state to extract account_id, agent_id, and mcp_url
+        # Decode state to extract agent_id and mcp_url
         state_data = json.loads(
             base64.urlsafe_b64decode(state.encode()).decode()
         )
 
-        account_id = state_data.get("account_id")
         agent_id = state_data.get("agent_id")
         mcp_url = state_data.get("mcp_url")
 
-        if not account_id or not agent_id:
+        if not agent_id:
             return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid state parameter: missing account_id or agent_id",
+            message="Invalid state parameter: missing agent_id",
             status_code=status.HTTP_400_BAD_REQUEST
         )
 
@@ -538,17 +520,16 @@ async def oauth_callback(
         # Complete authorization using extracted IDs
         logger.info(
             f"Asana callback: Starting authorization completion. "
-            f"account_id={account_id}, agent_id={agent_id}"
+            f"agent_id={agent_id}"
         )
         
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,
             db=db
         )
-        
+
         logger.info(
             f"Asana callback: Authorization completed. "
             f"success={result.get('success')}, "
@@ -560,7 +541,7 @@ async def oauth_callback(
         # Verify that credentials were saved
         if result.get("success"):
             try:
-                credentials = await service._load_credentials(account_id, agent_id)
+                credentials = await service._load_credentials(agent_id)
                 if credentials:
                     has_token = bool(credentials.get("access_token"))
                     logger.info(

@@ -105,17 +105,14 @@ async def get_metrics(
 ):
     """
     Get execution metrics with optional filters.
-    - Regular users can only see metrics for their own client.
-    - Admins can see all metrics, or filter by a specific account_id.
+    - Returns execution metrics with optional filters.
     """
 
-    # Use account_id from authenticated user
-    account_id = str(current_user["account_id"])
     agent_id = str(agent_id) if agent_id else None
-    
+
     result = get_execution_metrics(
         db,
-        user_id=account_id,
+        user_id=None,
         session_id=session_id,
         agent_id=agent_id,
         skip=skip,
@@ -168,27 +165,13 @@ async def create_new_session(
         pass
     is_agent_bot = user_context.get("is_agent_bot", False)
     
-    if is_agent_bot:
-        # For agent bots, get account_id from user_context
-        account_id = user_context.get("account_id")
-        if not account_id:
-            return error_response(
-                request=request,
-                code=map_status_to_error_code(status.HTTP_401_UNAUTHORIZED),
-                message="Account ID not found in agent bot context",
-                status_code=status.HTTP_401_UNAUTHORIZED
-            )
-        account_id = str(account_id)
-    else:
-        # For regular users, get from current_user
-        if not current_user:
-            return error_response(
-                request=request,
-                code=map_status_to_error_code(status.HTTP_401_UNAUTHORIZED),
-                message="Authentication required",
-                status_code=status.HTTP_401_UNAUTHORIZED
-            )
-        account_id = str(current_user["account_id"])
+    if not is_agent_bot and not current_user:
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_401_UNAUTHORIZED),
+            message="Authentication required",
+            status_code=status.HTTP_401_UNAUTHORIZED
+        )
     
     agent_id = str(agent_id)
 
@@ -206,20 +189,23 @@ async def create_new_session(
     if not is_agent_bot:
         has_access, is_shared_access = await verify_agent_access(db, agent, "read")
 
+    # Get user identifier
+    default_user_id = str(current_user.get("user_id") or current_user.get("email") or "") if current_user else ""
+
     # Get session_id and user_id from request_data or use defaults
     if request_data:
         session_id = request_data.session_id or str(uuid.uuid4())
-        user_id = request_data.user_id or account_id
+        user_id = request_data.user_id or default_user_id
         metadata = request_data.metadata or metadata
     else:
         # Backward compatibility: generate UUID session_id
         session_id = str(uuid.uuid4())
-        user_id = account_id
+        user_id = default_user_id
 
     # Create the session directly in the database first to ensure persistence
     try:
         logger.info(
-            f"Creating session {session_id} for agent {agent_id} and account {account_id}"
+            f"Creating session {session_id} for agent {agent_id} and user {user_id}"
         )
         
         # Check if session already exists (don't raise exception if not found)
@@ -232,7 +218,6 @@ async def create_new_session(
                         "session_id": session_id,
                         "agent_id": agent_id,
                         "user_id": user_id,
-                        "account_id": account_id,
                         "created_at": datetime.now().isoformat(),
                         "status": "exists",
                     },
@@ -295,7 +280,7 @@ async def create_new_session(
     session_metadata = None
     if metadata:
         session_metadata = create_session_metadata(
-            db, session_id, account_id, metadata
+            db, session_id, user_id, metadata
         )
 
     logger.info(
@@ -306,7 +291,6 @@ async def create_new_session(
         "session_id": session_id,
         "agent_id": agent_id,
         "user_id": user_id,
-        "account_id": account_id,
         "created_at": datetime.now().isoformat(),
         "status": "created",
     }
@@ -338,11 +322,11 @@ async def get_account_sessions(
     _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
     db: Session = Depends(get_db)
 ):
-    account_id = str(current_user["account_id"])
-    email = current_user["email"]
-    
+    user_id = str(current_user.get("user_id") or current_user.get("email") or "")
+    email = current_user.get("email", "")
+
     # Get sessions from database
-    sessions = await get_sessions_by_account(db, account_id, email)
+    sessions = await get_sessions_by_account(db, user_id, email)
 
     # Add metadata to each session
     sessions_with_metadata = []
@@ -391,22 +375,16 @@ async def get_agent_sessions(
     # Verify if the user has access to the agent (including shared folder access)
     has_access, is_shared_access = await verify_agent_access(db, agent, "read")
 
-    # For agent test sessions, we should list ALL sessions for the agent
-    # (both test sessions with account_id as user_id AND real sessions with contact_id as user_id)
-    # The account_id is used to verify access, but we don't filter sessions by it
-    # because real agent sessions use contact_id as user_id
-    
-    account_id = str(current_user.get("account_id", ""))
+    # List ALL sessions for the agent (both test sessions and real sessions)
     
     logger.info(
-        f"🔍 Searching sessions for agent {agent_id} (account_id: {account_id})"
+        f"Searching sessions for agent {agent_id}"
     )
     logger.info(
-        f"🔍 Current user data: account_id={current_user.get('account_id')}, user_id={current_user.get('user_id')}, email={current_user.get('email')}"
+        f"Current user data: user_id={current_user.get('user_id')}, email={current_user.get('email')}"
     )
 
     # Get ALL sessions from database for this agent (no user_id filter)
-    # This includes both test sessions (user_id = account_id) and real sessions (user_id = contact_id)
     sessions = await get_sessions_by_agent(db, agent_id, skip, limit, user_id=None)
     
     logger.info(
@@ -965,11 +943,11 @@ async def update_session_metadata_endpoint(
                 db, agent, "write"
             )
 
-    # Use the account_id from the authenticated user
-    account_id = str(current_user["account_id"])
-    
+    # Use user_id from the authenticated user
+    user_id = str(current_user.get("user_id") or current_user.get("email") or "")
+
     # Try to update existing metadata first
-    updated_metadata = update_session_metadata(db, session_id, account_id, metadata)
+    updated_metadata = update_session_metadata(db, session_id, user_id, metadata)
 
     if not updated_metadata:
         # Create new metadata if it doesn't exist
@@ -977,7 +955,7 @@ async def update_session_metadata_endpoint(
             name=metadata.name, description=metadata.description, tags=metadata.tags
         )
         updated_metadata = create_session_metadata(
-            db, session_id, account_id, metadata_create
+            db, session_id, user_id, metadata_create
         )
 
     return success_response(
@@ -1036,10 +1014,10 @@ async def delete_session_metadata_endpoint(
                 db, agent, "write"
             )
 
-    # Use the account_id from the authenticated user
-    account_id = str(current_user["account_id"])
-    
-    deleted = delete_session_metadata(db, session_id, account_id)
+    # Use user_id from the authenticated user
+    user_id = str(current_user.get("user_id") or current_user.get("email") or "")
+
+    deleted = delete_session_metadata(db, session_id, user_id)
 
     if not deleted:
         return error_response(
@@ -1099,20 +1077,9 @@ async def create_session_sync(
             status_code=status.HTTP_404_NOT_FOUND
         )
     
-    # Get account_id from user_context (for agent bots) or from request
-    account_id = user_context.get("account_id") if is_agent_bot else None
-    if not account_id:
-        return error_response(
-            request=request,
-            code=map_status_to_error_code(status.HTTP_401_UNAUTHORIZED),
-            message="Account ID not found",
-            status_code=status.HTTP_401_UNAUTHORIZED
-        )
-    account_id = str(account_id)
-    
     # Get session_id and user_id from request_data
     session_id = request_data.session_id or str(uuid.uuid4())
-    user_id = request_data.user_id or account_id
+    user_id = request_data.user_id or str(uuid.uuid4())
     
     # Check if session already exists
     try:
