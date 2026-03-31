@@ -47,22 +47,6 @@ from src.config.database import Base
 import uuid
 
 # Plan and Feature Models for Feature Flag System
-class Account(Base):
-    """Account model for feature flag validation"""
-    __tablename__ = "accounts"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    id = Column(UUID(as_uuid=True), primary_key=True)
-    name = Column(String, nullable=False)
-    status = Column(String, default="active")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    account_plans = relationship("AccountPlan", back_populates="account")
-    account_features = relationship("AccountFeature", back_populates="account")
-
-
 class Plan(Base):
     """Plan model for subscription management"""
     __tablename__ = "plans"
@@ -77,7 +61,6 @@ class Plan(Base):
 
     # Relationships
     plan_features = relationship("PlanFeature", back_populates="plan")
-    account_plans = relationship("AccountPlan", back_populates="plan")
 
 
 class Feature(Base):
@@ -95,7 +78,6 @@ class Feature(Base):
 
     # Relationships
     plan_features = relationship("PlanFeature", back_populates="feature")
-    account_features = relationship("AccountFeature", back_populates="feature")
 
 
 class PlanFeature(Base):
@@ -115,41 +97,6 @@ class PlanFeature(Base):
     feature = relationship("Feature", back_populates="plan_features")
 
 
-class AccountPlan(Base):
-    """Account's active plan assignment"""
-    __tablename__ = "account_plans"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False)
-    plan_id = Column(UUID(as_uuid=True), ForeignKey("plans.id"), nullable=False)
-    is_active = Column(Boolean, default=False)
-    starts_at = Column(DateTime(timezone=True), nullable=False)
-    ends_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    account = relationship("Account", back_populates="account_plans")
-    plan = relationship("Plan", back_populates="account_plans")
-
-
-class AccountFeature(Base):
-    """Account-specific feature overrides"""
-    __tablename__ = "account_features"
-    __table_args__ = {"info": {"skip_autogenerate": True}}
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False)
-    feature_id = Column(UUID(as_uuid=True), ForeignKey("features.id"), nullable=False)
-    value = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    # Relationships
-    account = relationship("Account", back_populates="account_features")
-    feature = relationship("Feature", back_populates="account_features")
-
 class User(Base):
     """
     This definition is only for foreign key references.
@@ -164,7 +111,6 @@ class AgentFolder(Base):
     __table_args__ = {"extend_existing": True, "info": {"skip_autogenerate": True}}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(UUID(as_uuid=True), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -214,7 +160,6 @@ class Agent(Base):
     __table_args__ = {"extend_existing": True, "info": {"skip_autogenerate": True}}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(UUID(as_uuid=True), nullable=False)
     name = Column(String, nullable=False)
     role = Column(String, nullable=True)
     goal = Column(Text, nullable=True)
@@ -355,7 +300,6 @@ class CustomMCPServer(Base):
     __table_args__ = {"info": {"skip_autogenerate": True}}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(UUID(as_uuid=True), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     url = Column(String, nullable=False)
@@ -373,7 +317,6 @@ class ApiKey(Base):
     __table_args__ = {"info": {"skip_autogenerate": True}}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(UUID(as_uuid=True), nullable=False)
     name = Column(String, nullable=False)
     provider = Column(String, nullable=False)
     key = Column(String, nullable=False)  # Correct column name from database
@@ -387,7 +330,6 @@ class CustomTool(Base):
     __table_args__ = {"info": {"skip_autogenerate": True}}
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    account_id = Column(UUID(as_uuid=True), nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     method = Column(String, nullable=False)

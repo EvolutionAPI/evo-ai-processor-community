@@ -196,7 +196,7 @@ class CustomToolBuilder:
         return FunctionTool(func=exit_loop)
 
     def build_tools(
-        self, tools_config: Dict[str, Any], db=None, account_id=None
+        self, tools_config: Dict[str, Any], db=None
     ) -> List[FunctionTool]:
         """Builds a list of tools based on the provided configuration.
 
@@ -209,19 +209,18 @@ class CustomToolBuilder:
         Args:
             tools_config: Configuration dictionary containing tool definitions or IDs
             db: Database session (required when using custom_tool_ids)
-            account_id: Account ID (required when using custom_tool_ids)
         """
         self.tools = []
 
         # Process custom_tool_ids - fetch from database
         custom_tool_ids = tools_config.get("custom_tool_ids", [])
         if custom_tool_ids:
-            if not db or not account_id:
+            if not db:
                 logger.error(
-                    "Database session and account_id are required when using custom_tool_ids"
+                    "Database session is required when using custom_tool_ids"
                 )
                 raise ValueError(
-                    "Database session and account_id are required when using custom_tool_ids"
+                    "Database session is required when using custom_tool_ids"
                 )
 
             from src.services import custom_tool_service

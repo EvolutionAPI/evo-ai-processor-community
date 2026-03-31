@@ -34,19 +34,18 @@ from typing import List, Optional, Dict, Any
 import logging
 logger = logging.getLogger(__name__)
 
-# Fetch custom tools by account ID with optional filtering
-async def get_custom_tools_by_account(
+# Fetch custom tools with optional filtering
+async def get_custom_tools(
     db: Session,
-    account_id: int,
     skip: int = 0,
     limit: int = 100,
     search: Optional[str] = None,
     tags: Optional[List[str]] = None,
 ) -> List[CustomTool]:
-    """Get custom tools for an account with filtering"""
+    """Get custom tools with filtering"""
 
     try:
-        query = db.query(CustomTool).filter(CustomTool.account_id == account_id)
+        query = db.query(CustomTool)
 
         if search:
             search_filter = f"%{search}%"
@@ -62,7 +61,7 @@ async def get_custom_tools_by_account(
 
         return query.order_by(CustomTool.name).offset(skip).limit(limit).all()
     except SQLAlchemyError as e:
-        logger.error(f"Error getting custom tools for account {account_id}: {str(e)}")
+        logger.error(f"Error getting custom tools: {str(e)}")
         return []
 
 # Convert CustomTool to HTTPTool format for agent configuration 

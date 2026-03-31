@@ -12,7 +12,6 @@ logger = setup_logger(__name__)
 
 
 def create_calendar_event_tool(
-    account_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     calendar_config: Optional[Dict[str, Any]] = None,
     credentials_config: Optional[Dict[str, Any]] = None,
@@ -22,7 +21,6 @@ def create_calendar_event_tool(
     Create a tool for creating Google Calendar events.
 
     Args:
-        account_id: Optional default account ID
         agent_id: Optional default agent ID
         calendar_config: Google Calendar configuration from agent.config.integrations
         credentials_config: Google Calendar credentials from agent.config.integrations
@@ -80,17 +78,10 @@ def create_calendar_event_tool(
         try:
             logger.info(f"Creating calendar event: {title} from {start_date} to {end_date}")
 
-            # Use account_id and agent_id from closure (passed to create_calendar_event_tool)
-            effective_account_id = account_id
+            # Use agent_id from closure (passed to create_calendar_event_tool)
             effective_agent_id = agent_id
 
             # Validate required parameters
-            if not effective_account_id:
-                return {
-                    "status": "error",
-                    "message": "Account ID is required but was not provided"
-                }
-
             if not effective_agent_id:
                 return {
                     "status": "error",

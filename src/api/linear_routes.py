@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.services.linear_service import LinearService
-from src.api.dependencies import verify_account_access
 from src.config.database import get_db
 from src.utils.response import success_response, error_response, map_status_to_error_code
 from src.schemas.responses import SuccessResponse, ErrorResponse
@@ -30,7 +29,7 @@ from src.schemas.response_models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/accounts/{account_id}/agents/{agent_id}/integrations/linear",
+    prefix="/agents/{agent_id}/integrations/linear",
     tags=["linear"],
 )
 
@@ -160,10 +159,8 @@ async def get_linear_service(
     }
 )
 async def discover_oauth(
-    account_id: str,
     agent_id: str,
     service: LinearService = Depends(get_linear_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Discover OAuth requirements from Linear MCP server.
@@ -198,10 +195,8 @@ async def discover_oauth(
     }
 )
 async def generate_authorization(
-    account_id: str,
     agent_id: str,
     service: LinearService = Depends(get_linear_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Generate OAuth 2.0 authorization URL for Linear MCP.
@@ -213,7 +208,6 @@ async def generate_authorization(
     """
     try:
         url = await service.generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
         )
 
@@ -242,12 +236,10 @@ async def generate_authorization(
     }
 )
 async def complete_authorization(
-    account_id: str,
     agent_id: str,
     request: CallbackRequest,
     db: Session = Depends(get_db),
     service: LinearService = Depends(get_linear_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Complete OAuth authorization flow and store tokens.
@@ -256,7 +248,6 @@ async def complete_authorization(
     """
     try:
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=request.code,
             state=request.state,
@@ -304,11 +295,9 @@ async def complete_authorization(
     }
 )
 async def get_configuration(
-    account_id: str,
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[LinearService] = Depends(get_linear_service_optional),
-    _: None = Depends(verify_account_access)
 ):
     """Get Linear integration configuration. Creates default config if not found."""
     try:
@@ -317,7 +306,7 @@ async def get_configuration(
         
         # Try to load from database first (preferred method)
         load_from_service = service._load_credentials if service else None
-        config = await get_integration_config(db, account_id, agent_id, "linear", load_from_service=load_from_service)
+        config = await get_integration_config(db, agent_id, "linear", load_from_service=load_from_service)
         
         if not config:
             # Create default configuration if not found
@@ -331,7 +320,7 @@ async def get_configuration(
                 from src.services.agent_service import upsert_agent_integration
                 
                 success = await upsert_agent_integration(
-                    db, agent_id, account_id, "linear", default_config
+                    db, agent_id, "linear", default_config
                 )
                 if success:
                     logger.info(f"Created default Linear integration config for agent {agent_id}")
@@ -382,20 +371,18 @@ async def get_configuration(
     }
 )
 async def discover_tools(
-    account_id: str,
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[LinearService] = Depends(get_linear_service_optional),
-    _: None = Depends(verify_account_access)
 ):
     """Discover available MCP tools from Linear using stored access_token."""
     from src.api.mcp_integration_base import discover_tools_endpoint
-    
+
     # Pass load_from_service as fallback if service is available
     load_from_service = service._load_credentials if service else None
-    
+
     tools = await discover_tools_endpoint(
-        account_id, agent_id, "linear", "https://mcp.linear.app/mcp", db, load_from_service=load_from_service
+        agent_id, "linear", "https://mcp.linear.app/mcp", db, load_from_service=load_from_service
     )
 
     return success_response(
@@ -414,19 +401,17 @@ async def discover_tools(
     }
 )
 async def save_configuration(
-    account_id: str,
     agent_id: str,
     config: Dict[str, Any],
     db: Session = Depends(get_db),
     service: LinearService = Depends(get_linear_service),
-    _: None = Depends(verify_account_access)
 ):
     """Save Linear integration configuration."""
     try:
         # Load existing configuration from database (preferred) or service (fallback)
         from src.api.mcp_integration_base import get_integration_config
-        
-        stored_config = await get_integration_config(db, account_id, agent_id, "linear", load_from_service=service._load_credentials)
+
+        stored_config = await get_integration_config(db, agent_id, "linear", load_from_service=service._load_credentials)
         
         if not stored_config:
             return error_response(
@@ -454,9 +439,9 @@ async def save_configuration(
         from src.services.agent_service import upsert_agent_integration
         
         success = await upsert_agent_integration(
-            db, agent_id, account_id, "linear", updated_config
+            db, agent_id, "linear", updated_config
         )
-        
+
         if not success:
             return error_response(
             request=request,
@@ -495,14 +480,12 @@ async def save_configuration(
     }
 )
 async def disconnect(
-    account_id: str,
     agent_id: str,
     service: LinearService = Depends(get_linear_service),
-    _: None = Depends(verify_account_access)
 ):
     """Disconnect Linear integration."""
     try:
-        success = await service.disconnect(account_id, agent_id)
+        success = await service.disconnect(agent_id)
         return success_response(
             data={"success": success},
             message="Operation completed successfully"
@@ -537,27 +520,26 @@ async def oauth_callback(
     OAuth 2.0 callback endpoint for Linear MCP (fixed URL).
 
     This endpoint handles the OAuth redirect from Linear.
-    The account_id and agent_id are extracted from the state parameter.
+    The agent_id is extracted from the state parameter.
 
     Query Parameters:
         code: Authorization code from Linear OAuth
-        state: Base64-encoded JSON containing account_id, agent_id, and mcp_url
+        state: Base64-encoded JSON containing agent_id and mcp_url
     """
     try:
-        # Decode state to extract account_id, agent_id, and mcp_url
+        # Decode state to extract agent_id and mcp_url
         state_data = json.loads(
             base64.urlsafe_b64decode(state.encode()).decode()
         )
 
-        account_id = state_data.get("account_id")
         agent_id = state_data.get("agent_id")
         mcp_url = state_data.get("mcp_url")
 
-        if not account_id or not agent_id:
+        if not agent_id:
             return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid state parameter: missing account_id or agent_id",
+            message="Invalid state parameter: missing agent_id",
             status_code=status.HTTP_400_BAD_REQUEST
         )
 
@@ -595,7 +577,6 @@ async def oauth_callback(
 
         # Complete authorization using extracted IDs
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,

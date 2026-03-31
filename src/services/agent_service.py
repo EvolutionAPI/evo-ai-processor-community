@@ -87,8 +87,7 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
             tool_ids = [
                 uuid.UUID(str(tool_id)) for tool_id in config["custom_tool_ids"]
             ]
-            custom_tools_from_ids = await custom_tool_service.get_custom_tools_by_account(
-                agent.account_id
+            custom_tools_from_ids = await custom_tool_service.get_custom_tools(
             )
 
             # Filter by IDs
@@ -136,7 +135,7 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
             ]
             custom_servers_from_ids = (
                 custom_mcp_server_service.get_custom_mcp_servers_for_agent_config(
-                    db, agent.account_id, server_ids
+                    db, server_ids
                 )
             )
 
@@ -181,7 +180,6 @@ async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], a
     Returns:
         dict with validation result or None if invalid: {
             "valid": bool,
-            "account_id": str,
             "agent_id": str,
             "agent_name": str
         }
@@ -193,19 +191,18 @@ async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], a
                 agent_id = uuid.UUID(agent_id)
             except ValueError:
                 logger.warning(f"Invalid agent ID: {agent_id}")
-                return {"valid": False, "account_id": None, "agent_id": str(agent_id), "agent_name": None}
+                return {"valid": False, "agent_id": str(agent_id), "agent_name": None}
 
         agent = db.query(Agent).filter(Agent.id == agent_id).first()
         if not agent:
             logger.warning(f"Agent not found: {agent_id}")
-            return {"valid": False, "account_id": None, "agent_id": str(agent_id), "agent_name": None}
+            return {"valid": False, "agent_id": str(agent_id), "agent_name": None}
 
         # Get API key from agent config
         if not agent.config or not isinstance(agent.config, dict):
             logger.warning(f"Agent {agent_id} has no config")
             return {
                 "valid": False,
-                "account_id": str(agent.account_id),
                 "agent_id": str(agent.id),
                 "agent_name": agent.name
             }
@@ -215,7 +212,6 @@ async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], a
             logger.warning(f"Agent {agent_id} has no API key configured")
             return {
                 "valid": False,
-                "account_id": str(agent.account_id),
                 "agent_id": str(agent.id),
                 "agent_name": agent.name
             }
@@ -225,26 +221,24 @@ async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], a
             logger.warning(f"Invalid API key for agent {agent_id}")
             return {
                 "valid": False,
-                "account_id": str(agent.account_id),
                 "agent_id": str(agent.id),
                 "agent_name": agent.name
             }
 
         # Valid API key
-        logger.debug(f"Valid API key for agent {agent.name} (account: {agent.account_id})")
+        logger.debug(f"Valid API key for agent {agent.name}")
         return {
             "valid": True,
-            "account_id": str(agent.account_id),
             "agent_id": str(agent.id),
             "agent_name": agent.name
         }
 
     except Exception as e:
         logger.error(f"Error validating API key for agent {agent_id}: {str(e)}")
-        return {"valid": False, "account_id": None, "agent_id": str(agent_id), "agent_name": None}
+        return {"valid": False, "agent_id": str(agent_id), "agent_name": None}
 
 
-async def get_agent_integrations(db: Session, agent_id: Union[uuid.UUID, str], account_id: Union[uuid.UUID, str]) -> List[Dict[str, Any]]:
+async def get_agent_integrations(db: Session, agent_id: Union[uuid.UUID, str]) -> List[Dict[str, Any]]:
     """Get all integrations for an agent directly from database."""
     try:
         from sqlalchemy import text
@@ -252,8 +246,6 @@ async def get_agent_integrations(db: Session, agent_id: Union[uuid.UUID, str], a
         # Convert to UUID if needed
         if isinstance(agent_id, str):
             agent_id = uuid.UUID(agent_id)
-        if isinstance(account_id, str):
-            account_id = uuid.UUID(account_id)
 
         # Query integrations directly from database
         query = text("""
@@ -261,10 +253,10 @@ async def get_agent_integrations(db: Session, agent_id: Union[uuid.UUID, str], a
                 provider,
                 config::text as config_json
             FROM evo_core_agent_integrations
-            WHERE agent_id = :agent_id AND account_id = :account_id
+            WHERE agent_id = :agent_id
         """)
 
-        result = db.execute(query, {"agent_id": str(agent_id), "account_id": str(account_id)})
+        result = db.execute(query, {"agent_id": str(agent_id)})
         rows = result.fetchall()
 
         integrations = []
@@ -290,7 +282,6 @@ async def get_agent_integrations(db: Session, agent_id: Union[uuid.UUID, str], a
 async def get_agent_integration_by_provider(
     db: Session,
     agent_id: Union[uuid.UUID, str],
-    account_id: Union[uuid.UUID, str],
     provider: str
 ) -> Optional[Dict[str, Any]]:
     """Get a specific integration for an agent by provider, directly from database (without sanitization)."""
@@ -301,22 +292,18 @@ async def get_agent_integration_by_provider(
         # Convert to UUID if needed
         if isinstance(agent_id, str):
             agent_id = uuid.UUID(agent_id)
-        if isinstance(account_id, str):
-            account_id = uuid.UUID(account_id)
 
         # Query specific integration directly from database
         query = text("""
             SELECT config::text as config_json
             FROM evo_core_agent_integrations
             WHERE agent_id = :agent_id
-            AND account_id = :account_id
             AND provider = :provider
             LIMIT 1
         """)
 
         result = db.execute(query, {
             "agent_id": str(agent_id),
-            "account_id": str(account_id),
             "provider": provider
         })
         row = result.fetchone()
@@ -336,7 +323,6 @@ async def get_agent_integration_by_provider(
 async def upsert_agent_integration(
     db: Session,
     agent_id: Union[uuid.UUID, str],
-    account_id: Union[uuid.UUID, str],
     provider: str,
     config: Dict[str, Any]
 ) -> bool:
@@ -344,29 +330,26 @@ async def upsert_agent_integration(
     try:
         from sqlalchemy import text
         import json
-        
+
         # Convert to UUID if needed
         if isinstance(agent_id, str):
             agent_id = uuid.UUID(agent_id)
-        if isinstance(account_id, str):
-            account_id = uuid.UUID(account_id)
-        
+
         # Convert config to JSON string
         config_json = json.dumps(config)
-        
+
         # Upsert integration using PostgreSQL ON CONFLICT
         # Use CAST() instead of ::jsonb for SQLAlchemy text() compatibility
         query = text("""
-            INSERT INTO evo_core_agent_integrations (account_id, agent_id, provider, config, updated_at)
-            VALUES (:account_id, :agent_id, :provider, CAST(:config AS jsonb), NOW())
-            ON CONFLICT (account_id, agent_id, provider)
+            INSERT INTO evo_core_agent_integrations (agent_id, provider, config, updated_at)
+            VALUES (:agent_id, :provider, CAST(:config AS jsonb), NOW())
+            ON CONFLICT (agent_id, provider)
             DO UPDATE SET
                 config = CAST(:config AS jsonb),
                 updated_at = NOW()
         """)
-        
+
         db.execute(query, {
-            "account_id": str(account_id),
             "agent_id": str(agent_id),
             "provider": provider,
             "config": config_json
@@ -471,16 +454,15 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
 
 def get_agents_by_account(
     db: Session,
-    account_id: int,
     skip: int = 0,
     limit: int = 100,
     folder_id: Optional[uuid.UUID] = None,
     sort_by: str = "name",
     sort_direction: str = "asc",
 ) -> List[Agent]:
-    """Search for agents by client with pagination and optional folder filter"""
+    """Search for agents with pagination and optional folder filter"""
     try:
-        query = db.query(Agent).filter(Agent.account_id == account_id)
+        query = db.query(Agent)
 
         # Filter by folder if specified
         if folder_id is not None:
@@ -572,7 +554,7 @@ def get_agents_by_account(
 
         return agents
     except SQLAlchemyError as e:
-        logger.error(f"Error searching for account agents {account_id}: {str(e)}")
+        logger.error(f"Error searching for agents: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error searching for agents",
@@ -580,14 +562,14 @@ def get_agents_by_account(
 
 # Functions for agent folders
 def get_accessible_agents_for_account(
-    db: Session, user_email: str, account_id: int
+    db: Session, user_email: str
 ) -> List[Agent]:
     """Get all agents accessible to a user (owned + from shared folders)"""
     try:
         from src.models.models import FolderShare
 
-        # Get agents owned by the user's client
-        owned_agents = db.query(Agent).filter(Agent.account_id == account_id).all()
+        # Get all agents
+        owned_agents = db.query(Agent).all()
 
         # Get agents from shared folders that the user has access to
         shared_agents = (

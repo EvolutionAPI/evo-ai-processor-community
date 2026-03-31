@@ -156,40 +156,6 @@ class EvoAuthService:
     # Permission Management Methods
     # ============================================================================
     
-    async def check_account_permission(self, user_id: str, account_id: str, permission_key: str, 
-                                      auth_token: str = None, token_type: str = "bearer") -> bool:
-        """Check account-scoped permission for user
-        
-        Args:
-            user_id: The user UUID
-            account_id: The account UUID
-            permission_key: Permission key (e.g., 'ai_clients.usage')
-            auth_token: Optional authentication token
-            token_type: Type of auth_token ('bearer' or 'api_access_token')
-            
-        Returns:
-            True if user has permission, False otherwise
-        """
-        try:
-            headers = self.build_headers(auth_token, token_type) if auth_token else {}
-            response_json = await self._post_request(
-                f'/api/v1/accounts/{account_id}/users/{user_id}/check_permission',
-                {'permission_key': permission_key},
-                headers
-            )
-            
-            if response_json and response_json.get('success'):
-                response_data = response_json.get('data', {})
-                if response_data.get('has_permission'):
-                    return True
-            
-            error_info = response_json.get('error', {}) if response_json else {}
-            logger.error(f"Failed to check account permission: {error_info.get('message', 'Unknown error')}")
-            return False
-        except Exception as e:
-            logger.error(f"Error checking account permission: {e}")
-            return False
-    
     async def check_user_permission(self, user_id: str, permission_key: str, 
                                    auth_token: str = None, token_type: str = "bearer") -> bool:
         """Check global user permission

@@ -120,14 +120,13 @@ async def test_custom_mcp_server_connection(
 
 
 def get_custom_mcp_servers_for_agent_config(
-    db: Session, account_id: int, server_ids: List[uuid.UUID]
+    db: Session, server_ids: List[uuid.UUID]
 ) -> List[Dict[str, Any]]:
     """Get custom MCP servers for agent configuration by IDs"""
     try:
         servers = (
             db.query(CustomMCPServer)
             .filter(
-                CustomMCPServer.account_id == account_id,
                 CustomMCPServer.id.in_(server_ids),
             )
             .all()

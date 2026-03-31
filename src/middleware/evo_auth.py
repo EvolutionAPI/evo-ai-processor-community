@@ -82,8 +82,6 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                             agent_context = {
                                 "agent_id": validation_result.get("agent_id"),
                                 "agent_name": validation_result.get("agent_name"),
-                                "account_id": validation_result.get("account_id"),
-                                "account": {"id": validation_result.get("account_id")},
                                 "is_agent_bot": True,
                                 "token_info": {
                                     "access_token": x_api_key,
@@ -135,8 +133,6 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                             agent_context = {
                                 "agent_id": validation_result.get("agent_id"),
                                 "agent_name": validation_result.get("agent_name"),
-                                "account_id": validation_result.get("account_id"),
-                                "account": {"id": validation_result.get("account_id")},
                                 "is_agent_bot": True,
                                 "token_info": {
                                     "access_token": token,
@@ -148,7 +144,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                             request.state.current_user = agent_context
 
                             logger.info(
-                                f"EvoAuth: Successfully authenticated Agent Bot {validation_result.get('agent_name')} via API key for account {validation_result.get('account_id')}"
+                                f"EvoAuth: Successfully authenticated Agent Bot {validation_result.get('agent_name')} via API key"
                             )
 
                             return await call_next(request)
@@ -201,8 +197,6 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                     agent_context = {
                         "agent_id": validation_result.get("agent_id"),
                         "agent_name": validation_result.get("agent_name"),
-                        "account_id": validation_result.get("account_id"),
-                        "account": {"id": validation_result.get("account_id")},
                         "is_agent_bot": True,
                         "token_info": {
                             "access_token": token,
@@ -214,7 +208,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                     request.state.current_user = agent_context
 
                     logger.debug(
-                        f"EvoAuth: Successfully authenticated Agent Bot {validation_result.get('agent_name')} for account {validation_result.get('account_id')}"
+                        f"EvoAuth: Successfully authenticated Agent Bot {validation_result.get('agent_name')}"
                     )
 
                     return await call_next(request)
@@ -223,39 +217,23 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                     db.close()
             
             # For regular users (bearer or non-agent api_access_token)
-            # Build user context following evo-ai-core-service pattern
+            # Build user context
             user_dict = auth_response.user.dict()
-            accounts_list = [acc.dict() for acc in auth_response.accounts]
-            
-            # Find active account
-            active_account = None
-            for account in accounts_list:
-                if account.get("status") == "active":
-                    active_account = account
-                    break
-            
-            # If no active account found, use first account
-            if not active_account and accounts_list:
-                active_account = accounts_list[0]
-            
-            # Build user context with account_id
+
+            # Build user context
             user_context = {
                 'user_id': user_dict.get('id'),
-                'account_id': active_account.get('id') if active_account else None,
                 'email': user_dict.get('email'),
                 'name': user_dict.get('name'),
                 'display_name': user_dict.get('display_name'),
                 'availability': user_dict.get('availability', 'online'),
                 'mfa_enabled': user_dict.get('mfa_enabled', False),
                 'confirmed': user_dict.get('confirmed', True),
-                'accounts': accounts_list,
-                'account': active_account if active_account else {},
                 'is_agent_bot': False,
                 'role': user_dict.get('role'),
                 'type': user_dict.get('type'),
             }
-            
-            # Se não tiver token no response, criar um token_info básico
+
             if not auth_response.token:
                 user_context['token_info'] = {
                     'access_token': token,
@@ -263,13 +241,10 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                 }
             else:
                 user_context['token_info'] = auth_response.token.dict()
-            
+
             # Set context in request state
             request.state.user_context = user_context
-            request.state.current_user = {
-                **user_dict,
-                'account_id': active_account.get('id') if active_account else None,
-            }
+            request.state.current_user = user_dict
             request.state.auth_response = auth_response
             request.state.is_agent_api_key = is_agent_api_key
             

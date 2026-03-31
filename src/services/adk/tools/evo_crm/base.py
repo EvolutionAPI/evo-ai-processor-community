@@ -34,56 +34,49 @@ class EvoCrmClient:
         
         logger.info(f"EvoCrmClient initialized with base_url: {self.base_url}")
 
-    def _get_headers(self, account_id: Optional[str] = None, additional_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    def _get_headers(self, additional_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """Get default headers with service token authentication.
-        
+
         Args:
-            account_id: Account ID to include in account-id header (new standard: kebab-case header)
             additional_headers: Optional additional headers to include
-            
+
         Returns:
-            Dictionary with headers including service token and account-id
+            Dictionary with headers including service token
         """
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        
+
         if self.api_token:
             headers["X-Service-Token"] = self.api_token
         else:
             logger.warning("No API token available for CRM requests")
-        
-        # Add account-id header (new standard: kebab-case header instead of URL parameter)
-        if account_id:
-            headers["account-id"] = account_id
-        
+
         if additional_headers:
             headers.update(additional_headers)
-        
+
         return headers
 
     async def _make_request(
         self,
         method: str,
         endpoint: str,
-        account_id: str,
         params: Optional[Dict[str, Any]] = None,
         json_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Make an authenticated HTTP request to the CRM API.
-        
+
         Args:
             method: HTTP method (GET, POST, PUT, DELETE)
-            endpoint: API endpoint (relative to base_url, should be /api/v1/... without account_id in path)
+            endpoint: API endpoint (relative to base_url, should be /api/v1/...)
                      Examples: "/api/v1/contacts/{id}", "/api/v1/conversations/{id}/messages"
-            account_id: Account ID for the request (will be sent as account-id header)
             params: Optional query parameters
             json_data: Optional JSON body data
-            
+
         Returns:
             Response JSON data as dictionary
-            
+
         Raises:
             httpx.HTTPError: If request fails
             ValueError: If API token is not configured
@@ -92,17 +85,9 @@ class EvoCrmClient:
             raise ValueError(
                 "EVOAI_CRM_API_TOKEN not configured. Cannot make CRM API requests."
             )
-        
-        # Remove account_id from URL if present (old pattern compatibility)
-        # New standard: account-id goes in header, not in URL
+
         clean_endpoint = endpoint
-        if f"/accounts/{account_id}/" in clean_endpoint:
-            # Remove /accounts/{account_id}/ from endpoint
-            clean_endpoint = clean_endpoint.replace(f"/accounts/{account_id}/", "/")
-            logger.warning(
-                f"Removed account_id from URL path. Use new standard: account-id header instead of URL parameter."
-            )
-        
+
         # Ensure endpoint starts with /api/v1/
         if not clean_endpoint.startswith("/api/v1/"):
             if clean_endpoint.startswith("/"):
@@ -111,15 +96,13 @@ class EvoCrmClient:
             else:
                 # No leading slash, add /api/v1/
                 clean_endpoint = f"/api/v1/{clean_endpoint}"
-        
+
         full_url = f"{self.base_url}{clean_endpoint}"
-        
-        # Get headers with account-id (new standard: kebab-case header)
-        headers = self._get_headers(account_id=account_id)
-        
+
+        headers = self._get_headers()
+
         logger.info(
             f"Making {method} request to CRM API: {full_url}"
-            + (f" with account-id header: {account_id}" if account_id else "")
             + (f" with params: {params}" if params else "")
             + (f" with body: {json_data}" if json_data else "")
         )
@@ -166,76 +149,68 @@ class EvoCrmClient:
     async def post(
         self,
         endpoint: str,
-        account_id: str,
         json_data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Make a POST request to the CRM API.
-        
+
         Args:
             endpoint: API endpoint
-            account_id: Account ID
             json_data: JSON body data
             params: Optional query parameters
-            
+
         Returns:
             Response JSON data
         """
-        return await self._make_request("POST", endpoint, account_id, params, json_data)
+        return await self._make_request("POST", endpoint, params, json_data)
 
     async def get(
         self,
         endpoint: str,
-        account_id: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Make a GET request to the CRM API.
-        
+
         Args:
             endpoint: API endpoint
-            account_id: Account ID
             params: Optional query parameters
-            
+
         Returns:
             Response JSON data
         """
-        return await self._make_request("GET", endpoint, account_id, params)
+        return await self._make_request("GET", endpoint, params)
 
     async def put(
         self,
         endpoint: str,
-        account_id: str,
         json_data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Make a PUT request to the CRM API.
-        
+
         Args:
             endpoint: API endpoint
-            account_id: Account ID
             json_data: JSON body data
             params: Optional query parameters
-            
+
         Returns:
             Response JSON data
         """
-        return await self._make_request("PUT", endpoint, account_id, params, json_data)
+        return await self._make_request("PUT", endpoint, params, json_data)
 
     async def delete(
         self,
         endpoint: str,
-        account_id: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Make a DELETE request to the CRM API.
-        
+
         Args:
             endpoint: API endpoint
-            account_id: Account ID
             params: Optional query parameters
-            
+
         Returns:
             Response JSON data
         """
-        return await self._make_request("DELETE", endpoint, account_id, params)
+        return await self._make_request("DELETE", endpoint, params)
 

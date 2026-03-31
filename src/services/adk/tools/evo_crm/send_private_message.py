@@ -50,45 +50,11 @@ def _extract_conversation_id_from_metadata(tool_context: Optional[ToolContext]) 
     return None
 
 
-def _extract_account_id_from_metadata(tool_context: Optional[ToolContext]) -> Optional[str]:
-    """Extract account_id from tool_context metadata.
-    
-    Looks for account_id in various possible locations:
-    - evoai_crm_data.account.id
-    - account_id (direct)
-    - accountId (camelCase)
-    """
-    if not tool_context or not hasattr(tool_context, 'state'):
-        return None
-    
-    state = tool_context.state
-    
-    # Try evoai_crm_data
-    evoai_crm_data = state.get("evoai_crm_data", {})
-    if isinstance(evoai_crm_data, dict):
-        account = evoai_crm_data.get("account", {})
-        if isinstance(account, dict):
-            account_id = account.get("id")
-            if account_id:
-                return str(account_id)
-    
-    # Try direct keys
-    for key in ["account_id", "accountId"]:
-        if key in state:
-            return str(state[key])
-    
-    return None
-
-
-def create_send_private_message_tool(account_id: Optional[str] = None) -> FunctionTool:
+def create_send_private_message_tool() -> FunctionTool:
     """Create the send_private_message tool for sending private messages (reminders).
-    
+
     This tool sends private messages in conversations that are only visible to agents.
     Useful for creating reminders, internal notes, or agent-to-agent communication.
-    
-    Args:
-        account_id: Optional account ID. If provided, will be used as default.
-                   If not provided, must be passed as parameter when calling the tool.
     """
     
     client = EvoCrmClient()
@@ -96,32 +62,30 @@ def create_send_private_message_tool(account_id: Optional[str] = None) -> Functi
     async def send_private_message(
         content: str,
         conversation_id: Optional[str] = None,
-        account_id_param: Optional[str] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
         """Send a private message (reminder) in a conversation.
-        
+
         Use this tool when:
         - The user requests to set a reminder
         - You need to create an internal note for other agents
         - You want to leave a private message about the conversation
         - The agent configuration allows reminders ("permitir registrar lembretes")
-        
+
         Private messages are only visible to agents and not shown to customers.
         They are useful for:
         - Setting reminders for follow-ups
         - Leaving notes about customer preferences
         - Recording important context for future interactions
         - Agent-to-agent communication
-        
+
         Args:
             content: The content of the private message/reminder (required)
                     Can be plain text or HTML formatted
             conversation_id: The ID of the conversation to send the message in (optional,
                            will be extracted from metadata if not provided)
-            account_id_param: The account ID (optional, will be extracted from metadata if not provided)
             tool_context: The tool context containing session information (optional)
-            
+
         Returns:
             Dictionary with message status and details:
             {
@@ -155,20 +119,6 @@ def create_send_private_message_tool(account_id: Optional[str] = None) -> Functi
                     "conversation_id": effective_conversation_id,
                 }
             
-            # Extract account_id from metadata if not provided
-            effective_account_id = account_id_param or account_id
-            if not effective_account_id and tool_context:
-                effective_account_id = _extract_account_id_from_metadata(tool_context)
-                if effective_account_id:
-                    logger.info(f"Extracted account_id from metadata: {effective_account_id}")
-            
-            if not effective_account_id:
-                return {
-                    "status": "error",
-                    "message": "account_id is required. It should be automatically extracted from the conversation context, but if not available, please provide it explicitly.",
-                    "conversation_id": effective_conversation_id,
-                }
-            
             logger.info(
                 f"Sending private message in conversation {effective_conversation_id}: {content[:100]}..."
             )
@@ -192,7 +142,6 @@ def create_send_private_message_tool(account_id: Optional[str] = None) -> Functi
             try:
                 response = await client.post(
                     endpoint=endpoint,
-                    account_id=effective_account_id,
                     json_data=request_body,
                 )
                 
@@ -277,7 +226,6 @@ def create_send_private_message_tool(account_id: Optional[str] = None) -> Functi
                 Can be plain text or HTML formatted
         conversation_id: The ID of the conversation to send the message in (optional,
                        will be automatically extracted from conversation context)
-        account_id_param: The account ID (optional, will be automatically extracted from context)
         tool_context: The tool context containing session information (automatically provided)
     
     Returns:

@@ -11,7 +11,6 @@ logger = setup_logger(__name__)
 
 
 def create_create_spreadsheet_tool(
-    account_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     sheets_config: Optional[Dict[str, Any]] = None,
     credentials_config: Optional[Dict[str, Any]] = None,
@@ -21,7 +20,6 @@ def create_create_spreadsheet_tool(
     Create a tool for creating new Google Sheets spreadsheets.
 
     Args:
-        account_id: Optional default account ID
         agent_id: Optional default agent ID
         sheets_config: Google Sheets configuration from agent.config.integrations
         credentials_config: Google Sheets credentials from agent.config.integrations
@@ -66,17 +64,10 @@ def create_create_spreadsheet_tool(
         try:
             logger.info(f"Creating new Google Sheets spreadsheet: {title}")
 
-            # Use account_id and agent_id from closure
-            effective_account_id = account_id
+            # Use agent_id from closure
             effective_agent_id = agent_id
 
             # Validate required parameters
-            if not effective_account_id:
-                return {
-                    "status": "error",
-                    "message": "Account ID is required but was not provided"
-                }
-
             if not effective_agent_id:
                 return {
                     "status": "error",

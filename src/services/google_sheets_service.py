@@ -65,7 +65,6 @@ class GoogleSheetsService:
 
     def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         email: Optional[str] = None
     ) -> str:
@@ -73,7 +72,6 @@ class GoogleSheetsService:
         Generate OAuth 2.0 authorization URL.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             email: Optional email hint for OAuth flow
 
@@ -102,7 +100,6 @@ class GoogleSheetsService:
         # We'll use a simple JWT-like encoding
         import base64
         state_data = {
-            "account_id": account_id,
             "agent_id": agent_id,
             "timestamp": datetime.utcnow().isoformat()
         }
@@ -123,7 +120,6 @@ class GoogleSheetsService:
 
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -133,7 +129,6 @@ class GoogleSheetsService:
         Complete OAuth authorization flow and store tokens.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
@@ -148,7 +143,7 @@ class GoogleSheetsService:
                 base64.urlsafe_b64decode(state.encode()).decode()
             )
 
-            if state_data.get('account_id') != account_id or state_data.get('agent_id') != agent_id:
+            if state_data.get('agent_id') != agent_id:
                 raise ValueError("Invalid state parameter")
 
             # Manual token exchange without scope validation
@@ -200,10 +195,10 @@ class GoogleSheetsService:
                 email = id_info.get('email')
 
             # Store credentials in database
-            await self._store_credentials(account_id, agent_id, credentials, email, db=db)
+            await self._store_credentials(agent_id, credentials, email, db=db)
 
             # Fetch available spreadsheets
-            spreadsheets = await self.get_spreadsheets(account_id, agent_id, db=db)
+            spreadsheets = await self.get_spreadsheets(agent_id, db=db)
 
             return {
                 "success": True,
@@ -220,7 +215,6 @@ class GoogleSheetsService:
 
     async def get_spreadsheets(
         self,
-        account_id: str,
         agent_id: str,
         db: Optional[Any] = None
     ) -> List[Dict[str, Any]]:
@@ -228,7 +222,6 @@ class GoogleSheetsService:
         Get list of available Google Sheets spreadsheets for the user.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             db: Optional database session
 
@@ -237,7 +230,7 @@ class GoogleSheetsService:
         """
         try:
             logger.info(f"get_spreadsheets called with db={bool(db)}")
-            credentials = await self._load_credentials(account_id, agent_id, db=db)
+            credentials = await self._load_credentials(agent_id, db=db)
             logger.info(f"Credentials loaded: token={bool(credentials.token) if credentials else None}, refresh={bool(credentials.refresh_token) if credentials else None}")
             if not credentials:
                 raise ValueError("No credentials found")
@@ -274,7 +267,6 @@ class GoogleSheetsService:
 
     async def save_configuration(
         self,
-        account_id: str,
         agent_id: str,
         config: Dict[str, Any]
     ) -> bool:
@@ -282,7 +274,6 @@ class GoogleSheetsService:
         Save Google Sheets configuration.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             config: Configuration dictionary
 
@@ -310,14 +301,12 @@ class GoogleSheetsService:
 
     async def get_configuration(
         self,
-        account_id: str,
         agent_id: str
     ) -> Optional[Dict[str, Any]]:
         """
         Get Google Sheets configuration.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
 
         Returns:
@@ -347,14 +336,12 @@ class GoogleSheetsService:
 
     async def disconnect(
         self,
-        account_id: str,
         agent_id: str
     ) -> bool:
         """
         Disconnect Google Sheets integration.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
 
         Returns:
@@ -362,7 +349,7 @@ class GoogleSheetsService:
         """
         try:
             # Revoke tokens
-            credentials = await self._load_credentials(account_id, agent_id)
+            credentials = await self._load_credentials(agent_id)
             if credentials and credentials.token:
                 try:
                     from google.auth.transport.requests import Request
@@ -388,7 +375,6 @@ class GoogleSheetsService:
 
     async def read_spreadsheet(
         self,
-        account_id: str,
         agent_id: str,
         spreadsheet_id: str,
         range_name: str = 'A1:Z1000'
@@ -397,7 +383,6 @@ class GoogleSheetsService:
         Read data from a spreadsheet.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             spreadsheet_id: Spreadsheet ID
             range_name: Range to read (e.g., 'Sheet1!A1:D10')
@@ -406,7 +391,7 @@ class GoogleSheetsService:
             Dictionary with spreadsheet values
         """
         try:
-            credentials = await self._load_credentials(account_id, agent_id)
+            credentials = await self._load_credentials(agent_id)
             if not credentials:
                 raise ValueError("No credentials found")
 
@@ -435,7 +420,6 @@ class GoogleSheetsService:
 
     async def write_spreadsheet(
         self,
-        account_id: str,
         agent_id: str,
         spreadsheet_id: str,
         range_name: str,
@@ -445,7 +429,6 @@ class GoogleSheetsService:
         Write data to a spreadsheet.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             spreadsheet_id: Spreadsheet ID
             range_name: Range to write (e.g., 'Sheet1!A1')
@@ -455,7 +438,7 @@ class GoogleSheetsService:
             Dictionary with success status and updated range
         """
         try:
-            credentials = await self._load_credentials(account_id, agent_id)
+            credentials = await self._load_credentials(agent_id)
             if not credentials:
                 raise ValueError("No credentials found")
 
@@ -488,7 +471,6 @@ class GoogleSheetsService:
 
     async def append_spreadsheet(
         self,
-        account_id: str,
         agent_id: str,
         spreadsheet_id: str,
         range_name: str,
@@ -498,7 +480,6 @@ class GoogleSheetsService:
         Append data to a spreadsheet.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             spreadsheet_id: Spreadsheet ID
             range_name: Range to append to (e.g., 'Sheet1!A1')
@@ -508,7 +489,7 @@ class GoogleSheetsService:
             Dictionary with success status and updated range
         """
         try:
-            credentials = await self._load_credentials(account_id, agent_id)
+            credentials = await self._load_credentials(agent_id)
             if not credentials:
                 raise ValueError("No credentials found")
 
@@ -541,7 +522,6 @@ class GoogleSheetsService:
 
     async def create_spreadsheet(
         self,
-        account_id: str,
         agent_id: str,
         title: str,
         sheet_titles: Optional[List[str]] = None
@@ -550,7 +530,6 @@ class GoogleSheetsService:
         Create a new spreadsheet.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             title: Spreadsheet title
             sheet_titles: Optional list of sheet names
@@ -559,7 +538,7 @@ class GoogleSheetsService:
             Dictionary with success status, spreadsheet ID and URL
         """
         try:
-            credentials = await self._load_credentials(account_id, agent_id)
+            credentials = await self._load_credentials(agent_id)
             if not credentials:
                 raise ValueError("No credentials found")
 
@@ -597,7 +576,6 @@ class GoogleSheetsService:
 
     async def _store_credentials(
         self,
-        account_id: str,
         agent_id: str,
         credentials: Credentials,
         email: Optional[str] = None,
@@ -618,7 +596,7 @@ class GoogleSheetsService:
 
         if db:
             from src.services.agent_service import upsert_agent_integration
-            success = await upsert_agent_integration(db, agent_id, account_id, "google_sheets_credentials", credentials_data)
+            success = await upsert_agent_integration(db, agent_id, "google_sheets_credentials", credentials_data)
             if success:
                 logger.info("Successfully stored Google Sheets credentials directly to DB")
             else:
@@ -639,20 +617,19 @@ class GoogleSheetsService:
 
     async def _load_credentials(
         self,
-        account_id: str,
         agent_id: str,
         db: Optional[Any] = None
     ) -> Optional[Credentials]:
         """Load OAuth credentials directly from database (bypasses API sanitization)."""
         try:
-            logger.info(f"_load_credentials called - account_id={account_id}, agent_id={agent_id}, has_db={bool(db)}")
+            logger.info(f"_load_credentials called - agent_id={agent_id}, has_db={bool(db)}")
             credentials_data = None
 
             # Try to load from database first (no sanitization)
             if db:
                 from src.services.agent_service import get_agent_integration_by_provider
                 credentials_data = await get_agent_integration_by_provider(
-                    db, agent_id, account_id, "google_sheets_credentials"
+                    db, agent_id, "google_sheets_credentials"
                 )
                 if credentials_data:
                     logger.info("Loaded credentials directly from database (no sanitization)")
@@ -699,7 +676,6 @@ class GoogleSheetsService:
 
                 # Update stored credentials
                 await self._store_credentials(
-                    account_id,
                     agent_id,
                     credentials,
                     credentials_data.get('email'),

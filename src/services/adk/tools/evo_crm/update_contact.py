@@ -19,12 +19,6 @@ def _extract_conversation_id_from_metadata(tool_context: ToolContext) -> Optiona
     return evoai_crm_data.get("conversation_id") or evoai_crm_data.get("conversation", {}).get("id")
 
 
-def _extract_account_id_from_metadata(tool_context: ToolContext) -> Optional[str]:
-    """Extracts account ID from tool_context metadata."""
-    evoai_crm_data = tool_context.state.get("evoai_crm_data", {})
-    return evoai_crm_data.get("account", {}).get("id")
-
-
 def _extract_contact_id_from_metadata(tool_context: ToolContext) -> Optional[str]:
     """Extracts contact ID from tool_context metadata."""
     if not tool_context or not hasattr(tool_context, 'state'):
@@ -58,13 +52,9 @@ def _extract_contact_id_from_metadata(tool_context: ToolContext) -> Optional[str
     return None
 
 
-def create_update_contact_tool(account_id: Optional[str] = None) -> FunctionTool:
+def create_update_contact_tool() -> FunctionTool:
     """
-    Factory function to create an 'update_contact' tool for a specific account.
-
-    Args:
-        account_id: The account ID to use for CRM API requests. If not provided,
-                    it must be passed as a parameter to the tool function.
+    Factory function to create an 'update_contact' tool.
     """
     client = EvoCrmClient()
 
@@ -81,7 +71,6 @@ def create_update_contact_tool(account_id: Optional[str] = None) -> FunctionTool
         additional_attributes: Optional[Dict[str, Any]] = None,
         labels: Optional[List[str]] = None,
         contact_id: Optional[str] = None,
-        account_id_param: Optional[str] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
         """Update contact information in the CRM.
@@ -105,7 +94,6 @@ def create_update_contact_tool(account_id: Optional[str] = None) -> FunctionTool
             additional_attributes: Dictionary of additional attributes to update (optional)
             labels: List of label names to add to the contact (optional)
             contact_id: The ID of the contact to update (optional, will be automatically extracted from context)
-            account_id_param: The account ID (optional, will be automatically extracted from context)
             tool_context: The tool context containing session information (automatically provided)
             
         Returns:
@@ -131,20 +119,6 @@ def create_update_contact_tool(account_id: Optional[str] = None) -> FunctionTool
                     "status": "error",
                     "message": "contact_id is required. It should be automatically extracted from the conversation context, but if not available, please provide it explicitly.",
                     "contact_id": None,
-                }
-            
-            # Extract account_id from metadata if not provided
-            effective_account_id = account_id_param or account_id
-            if not effective_account_id and tool_context:
-                effective_account_id = _extract_account_id_from_metadata(tool_context)
-                if effective_account_id:
-                    logger.info(f"Extracted account_id from metadata: {effective_account_id}")
-            
-            if not effective_account_id:
-                return {
-                    "status": "error",
-                    "message": "account_id is required. It should be automatically extracted from the conversation context, but if not available, please provide it explicitly.",
-                    "contact_id": effective_contact_id,
                 }
             
             # Build request body with only provided fields
@@ -191,7 +165,6 @@ def create_update_contact_tool(account_id: Optional[str] = None) -> FunctionTool
             try:
                 response = await client.put(
                     endpoint=endpoint,
-                    account_id=effective_account_id,
                     json_data=request_body,
                 )
                 
@@ -283,7 +256,6 @@ def create_update_contact_tool(account_id: Optional[str] = None) -> FunctionTool
         additional_attributes: Dictionary of additional attributes to update (optional)
         labels: List of label names to add to the contact (optional)
         contact_id: The ID of the contact to update (required, auto-extracted if not provided)
-        account_id_param: The account ID (optional if provided during tool creation)
     
     Returns:
         Dictionary with update status and contact details
