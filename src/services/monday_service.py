@@ -60,7 +60,6 @@ class MondayService(MCPOAuthService):
 
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -73,7 +72,6 @@ class MondayService(MCPOAuthService):
         Overrides parent method to add Monday-specific user info retrieval.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
@@ -85,7 +83,6 @@ class MondayService(MCPOAuthService):
         """
         # Call parent method to handle OAuth flow
         result = await super().complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,
@@ -97,7 +94,7 @@ class MondayService(MCPOAuthService):
         if result.get("success"):
             try:
                 # Get access token from stored credentials (should have been saved by parent)
-                credentials = await self._load_credentials(account_id, agent_id)
+                credentials = await self._load_credentials(agent_id)
                 if not credentials:
                     return result
                 
@@ -136,11 +133,10 @@ class MondayService(MCPOAuthService):
                                 
                                 # Update stored credentials with user info, preserving all existing fields
                                 # Load existing config to preserve refresh_token, expires_in, etc.
-                                existing_config = await self._load_credentials(account_id, agent_id) or {}
+                                existing_config = await self._load_credentials(agent_id) or {}
                                 
                                 # Update with user info while preserving all other fields
                                 await self._store_credentials(
-                                    account_id=account_id,
                                     agent_id=agent_id,
                                     mcp_url=self.mcp_url,
                                     access_token=access_token,  # Preserve access_token
@@ -179,7 +175,6 @@ class MondayService(MCPOAuthService):
 
     async def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         scopes: Optional[list] = None,
     ) -> str:
@@ -190,7 +185,6 @@ class MondayService(MCPOAuthService):
         the authorization URL using the discovered authorization server and scopes.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             scopes: Optional list of scopes to request (defaults to all supported scopes)
 
@@ -204,7 +198,6 @@ class MondayService(MCPOAuthService):
 
         # Generate authorization URL using parent method
         return await super().generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
             scopes=scopes
         )

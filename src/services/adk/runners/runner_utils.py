@@ -81,7 +81,7 @@ class RunnerUtils:
             raise AgentNotFoundError(f"Agent with ID {agent_id} not found")
 
         # Load integrations directly from database
-        integrations = await get_agent_integrations(self.db, agent_id, get_root_agent.account_id)
+        integrations = await get_agent_integrations(self.db, agent_id)
         
         # Attach integrations to agent object for use in builder
         get_root_agent._integrations = integrations
@@ -437,19 +437,15 @@ class RunnerUtils:
                 logger.warning(f"Session {adk_session_id} not found, cannot add to memory")
                 return
 
-            # Extract account_id and compression parameters from agent config if available
+            # Extract compression parameters from agent config if available
             short_term_max_messages = None
             compression_interval = None
             memory_base_config_id = None
-            account_id = None
-            
-            # Get agent from database to extract account_id and config
+
+            # Get agent from database to extract config
             try:
                 agent = await get_agent(self.db, agent_id)
                 if agent:
-                    # Extract account_id from agent
-                    account_id = agent.account_id
-                    
                     # Extract compression parameters from agent config
                     if agent.config:
                         agent_config = agent.config if isinstance(agent.config, dict) else {}
@@ -458,11 +454,11 @@ class RunnerUtils:
                             compression_interval = agent_config.get("memory_medium_term_compression_interval")
                             memory_base_config_id = agent_config.get("memory_base_config_id")
             except Exception as e:
-                logger.debug(f"Could not extract account_id or compression parameters from agent: {e}")
+                logger.debug(f"Could not extract compression parameters from agent: {e}")
 
             # Pass database session and compression parameters if memory service supports it
             if hasattr(memory_service, "add_session_to_memory"):
-                # Check if method accepts compression parameters and account_id
+                # Check if method accepts compression parameters
                 import inspect
                 sig = inspect.signature(memory_service.add_session_to_memory)
                 params = list(sig.parameters.keys())
@@ -475,8 +471,6 @@ class RunnerUtils:
                     kwargs["short_term_max_messages"] = short_term_max_messages
                 if "compression_interval" in params and compression_interval is not None:
                     kwargs["compression_interval"] = compression_interval
-                if "account_id" in params and account_id is not None:
-                    kwargs["account_id"] = account_id
                 if "memory_base_config_id" in params and memory_base_config_id is not None:
                     kwargs["memory_base_config_id"] = memory_base_config_id
                 

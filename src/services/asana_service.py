@@ -1,29 +1,20 @@
 """
 Asana MCP OAuth and API integration service.
-
 This service uses the MCP OAuth Protected Resource discovery pattern:
 1. Discover OAuth requirements from Asana MCP server
 2. Perform OAuth flow using discovered authorization server
 3. Store tokens for use in MCP server headers
-
 This follows the standard MCP OAuth pattern for Asana MCP.
 """
-
 import logging
 from typing import Optional, Dict, Any
 import httpx
-
 from src.services.mcp_oauth_service import MCPOAuthService
-
 logger = logging.getLogger(__name__)
-
-
 class AsanaService(MCPOAuthService):
     """Service for Asana MCP OAuth and API operations."""
-
     # Default Asana MCP URL
     DEFAULT_MCP_URL = "https://mcp.asana.com/mcp"
-
     def __init__(
         self,
         redirect_uri: str,
@@ -35,7 +26,6 @@ class AsanaService(MCPOAuthService):
     ):
         """
         Initialize Asana MCP service.
-
         Args:
             redirect_uri: OAuth redirect URI
             core_service_url: Base URL for evo-ai-core-service API
@@ -45,7 +35,6 @@ class AsanaService(MCPOAuthService):
             mcp_url: Optional custom MCP URL (defaults to Asana MCP)
         """
         effective_mcp_url = mcp_url or self.DEFAULT_MCP_URL
-
         super().__init__(
             mcp_url=effective_mcp_url,
             redirect_uri=redirect_uri,
@@ -55,12 +44,9 @@ class AsanaService(MCPOAuthService):
             client_id=client_id,
             client_secret=client_secret
         )
-
         logger.info(f"AsanaService initialized with MCP URL: {effective_mcp_url}")
-
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -68,22 +54,17 @@ class AsanaService(MCPOAuthService):
     ) -> Dict[str, Any]:
         """
         Complete OAuth authorization flow and store tokens.
-
         Overrides parent method to add Asana-specific user info retrieval.
-
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
             db: Optional database session for direct DB access
-
         Returns:
             Dictionary with success status, username, and user info
         """
         # Call parent method to handle OAuth flow
         result = await super().complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,
@@ -94,7 +75,7 @@ class AsanaService(MCPOAuthService):
         if result.get("success"):
             try:
                 # Get access token from stored credentials (should have been saved by parent)
-                credentials = await self._load_credentials(account_id, agent_id)
+                credentials = await self._load_credentials(agent_id)
                 if not credentials:
                     logger.warning("No credentials found after authorization - token may not have been saved")
                     return result
@@ -128,11 +109,10 @@ class AsanaService(MCPOAuthService):
                         
                         # Update stored credentials with user info, preserving all existing fields
                         # Load existing config to preserve refresh_token, expires_in, etc.
-                        existing_config = await self._load_credentials(account_id, agent_id) or {}
+                        existing_config = await self._load_credentials(agent_id) or {}
                         
                         # Update with user info while preserving all other fields
                         await self._store_credentials(
-                            account_id=account_id,
                             agent_id=agent_id,
                             mcp_url=self.mcp_url,
                             access_token=access_token,  # Preserve access_token
@@ -151,24 +131,18 @@ class AsanaService(MCPOAuthService):
                 logger.debug(traceback.format_exc())
         
         return result
-
     async def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         scopes: Optional[list] = None,
     ) -> str:
         """
         Generate OAuth 2.0 authorization URL for Asana MCP.
-
         First discovers OAuth requirements from the MCP server, then generates
         the authorization URL using the discovered authorization server and scopes.
-
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             scopes: Optional list of scopes to request (defaults to all supported scopes)
-
         Returns:
             Authorization URL for user to visit
         """
@@ -176,11 +150,8 @@ class AsanaService(MCPOAuthService):
         if not self._oauth_metadata:
             logger.info("Discovering OAuth requirements from Asana MCP server...")
             await self.discover_oauth_requirements()
-
         # Generate authorization URL using parent method
         return await super().generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
             scopes=scopes
         )
-

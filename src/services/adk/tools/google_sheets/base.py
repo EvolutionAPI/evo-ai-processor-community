@@ -22,20 +22,18 @@ class GoogleSheetsClient:
 
     async def get_integration(
         self,
-        account_id: str,
         agent_id: str
     ) -> Optional[Dict[str, Any]]:
         """
         Fetch Google Sheets integration configuration for an agent directly from database.
 
         Args:
-            account_id: The account ID
             agent_id: The agent ID
 
         Returns:
             Integration configuration with credentials and settings, or None if not found
         """
-        cache_key = f"{account_id}:{agent_id}"
+        cache_key = agent_id
         if cache_key in self._integration_cache:
             return self._integration_cache[cache_key]
 
@@ -43,7 +41,7 @@ class GoogleSheetsClient:
         from src.services.agent_service import get_agent_integration_by_provider
 
         integration_config = await get_agent_integration_by_provider(
-            self.db, agent_id, account_id, "google_sheets"
+            self.db, agent_id, "google_sheets"
         )
 
         if integration_config:

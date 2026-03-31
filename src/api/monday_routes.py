@@ -18,7 +18,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from src.services.monday_service import MondayService
-from src.api.dependencies import verify_account_access
 from src.config.database import get_db
 from src.utils.response import success_response, error_response, map_status_to_error_code
 from src.schemas.responses import SuccessResponse, ErrorResponse
@@ -30,7 +29,7 @@ from src.schemas.response_models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/accounts/{account_id}/agents/{agent_id}/integrations/monday",
+    prefix="/agents/{agent_id}/integrations/monday",
     tags=["monday"],
 )
 
@@ -136,10 +135,8 @@ async def get_monday_service_optional(
     }
 )
 async def discover_oauth_requirements(
-    account_id: str,
     agent_id: str,
     service: MondayService = Depends(get_monday_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Discover OAuth requirements from Monday MCP server.
@@ -174,10 +171,8 @@ async def discover_oauth_requirements(
     }
 )
 async def generate_authorization(
-    account_id: str,
     agent_id: str,
     service: MondayService = Depends(get_monday_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Generate OAuth 2.0 authorization URL for Monday MCP.
@@ -189,7 +184,6 @@ async def generate_authorization(
     """
     try:
         url = await service.generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id
         )
         return success_response(
@@ -216,12 +210,10 @@ async def generate_authorization(
     }
 )
 async def complete_authorization(
-    account_id: str,
     agent_id: str,
     request: CallbackRequest,
     db: Session = Depends(get_db),
     service: MondayService = Depends(get_monday_service),
-    _: None = Depends(verify_account_access)
 ):
     """
     Complete OAuth authorization flow and store tokens.
@@ -234,7 +226,7 @@ async def complete_authorization(
         stored_code_verifier = None
         try:
             from src.services.agent_service import get_agent_integrations
-            integrations = await get_agent_integrations(db, agent_id, account_id)
+            integrations = await get_agent_integrations(db, agent_id)
             for integration in integrations:
                 if integration.get("provider", "").lower() == "monday":
                     stored_config = integration.get("config", {})
@@ -245,7 +237,6 @@ async def complete_authorization(
             logger.warning(f"Could not load code_verifier for POST callback: {load_error}")
         
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=request.code,
             state=request.state,
@@ -291,11 +282,9 @@ async def complete_authorization(
     }
 )
 async def get_configuration(
-    account_id: str,
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[MondayService] = Depends(get_monday_service_optional),
-    _: None = Depends(verify_account_access)
 ):
     """Get Monday integration configuration. Creates default config if not found."""
     try:
@@ -304,7 +293,7 @@ async def get_configuration(
         
         # Try to load from database first (preferred method)
         load_from_service = service._load_credentials if service else None
-        config = await get_integration_config(db, account_id, agent_id, "monday", load_from_service=load_from_service)
+        config = await get_integration_config(db, agent_id, "monday", load_from_service=load_from_service)
         
         if not config:
             # Return default disconnected state
@@ -351,20 +340,18 @@ async def get_configuration(
     }
 )
 async def discover_tools(
-    account_id: str,
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[MondayService] = Depends(get_monday_service_optional),
-    _: None = Depends(verify_account_access)
 ):
     """Discover available MCP tools from Monday using stored access_token."""
     from src.api.mcp_integration_base import discover_tools_endpoint
-    
+
     # Pass load_from_service as fallback if service is available
     load_from_service = service._load_credentials if service else None
-    
+
     tools = await discover_tools_endpoint(
-        account_id, agent_id, "monday", "https://mcp.monday.com/mcp", db, load_from_service=load_from_service
+        agent_id, "monday", "https://mcp.monday.com/mcp", db, load_from_service=load_from_service
     )
 
     return success_response(
@@ -383,19 +370,17 @@ async def discover_tools(
     }
 )
 async def update_configuration(
-    account_id: str,
     agent_id: str,
     config: Dict[str, Any],
     db: Session = Depends(get_db),
     service: MondayService = Depends(get_monday_service),
-    _: None = Depends(verify_account_access)
 ):
     """Save Monday integration configuration."""
     try:
         # Load existing configuration from database (preferred) or service (fallback)
         from src.api.mcp_integration_base import get_integration_config
-        
-        stored_config = await get_integration_config(db, account_id, agent_id, "monday", load_from_service=service._load_credentials)
+
+        stored_config = await get_integration_config(db, agent_id, "monday", load_from_service=service._load_credentials)
         
         if not stored_config:
             return error_response(
@@ -423,9 +408,9 @@ async def update_configuration(
         from src.services.agent_service import upsert_agent_integration
         
         success = await upsert_agent_integration(
-            db, agent_id, account_id, "monday", updated_config
+            db, agent_id, "monday", updated_config
         )
-        
+
         if not success:
             return error_response(
             request=request,
@@ -464,14 +449,12 @@ async def update_configuration(
     }
 )
 async def disconnect(
-    account_id: str,
     agent_id: str,
     service: MondayService = Depends(get_monday_service),
-    _: None = Depends(verify_account_access)
 ):
     """Disconnect Monday integration."""
     try:
-        success = await service.disconnect(account_id, agent_id)
+        success = await service.disconnect(agent_id)
         return success_response(
             data={"success": success},
             message="Operation completed successfully"
@@ -506,27 +489,26 @@ async def oauth_callback(
     OAuth 2.0 callback endpoint for Monday MCP (fixed URL).
 
     This endpoint handles the OAuth redirect from Monday.
-    The account_id and agent_id are extracted from the state parameter.
+    The agent_id is extracted from the state parameter.
 
     Query Parameters:
         code: Authorization code from Monday OAuth
-        state: Base64-encoded JSON containing account_id, agent_id, and mcp_url
+        state: Base64-encoded JSON containing agent_id and mcp_url
     """
     try:
-        # Decode state to extract account_id, agent_id, and mcp_url
+        # Decode state to extract agent_id and mcp_url
         state_data = json.loads(
             base64.urlsafe_b64decode(state.encode()).decode()
         )
 
-        account_id = state_data.get("account_id")
         agent_id = state_data.get("agent_id")
         mcp_url = state_data.get("mcp_url")
 
-        if not account_id or not agent_id:
+        if not agent_id:
             return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid state parameter: missing account_id or agent_id",
+            message="Invalid state parameter: missing agent_id",
             status_code=status.HTTP_400_BAD_REQUEST
         )
 
@@ -600,7 +582,7 @@ async def oauth_callback(
             service._token_endpoint_auth_method = stored_auth_method
         
         logger.info(
-            f"Monday callback: account_id={account_id}, agent_id={agent_id}, "
+            f"Monday callback: agent_id={agent_id}, "
             f"client_id={'set' if effective_client_id else 'not set'}, "
             f"client_secret={'set' if effective_client_secret else 'not set'}, "
             f"auth_method={stored_auth_method or 'none'}"
@@ -609,21 +591,20 @@ async def oauth_callback(
         # Complete authorization using extracted IDs
         logger.info(
             f"Monday callback: Starting authorization completion. "
-            f"account_id={account_id}, agent_id={agent_id}, "
+            f"agent_id={agent_id}, "
             f"code_length={len(code) if code else 0}, "
             f"state_length={len(state) if state else 0}, "
             f"code_verifier={'set' if stored_code_verifier else 'not set'}"
         )
         
         result = await service.complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,
             code_verifier=stored_code_verifier,
             db=db
         )
-        
+
         logger.info(
             f"Monday callback: Authorization completed. "
             f"success={result.get('success')}, "
@@ -635,7 +616,7 @@ async def oauth_callback(
         # Verify that credentials were saved
         if result.get("success"):
             try:
-                credentials = await service._load_credentials(account_id, agent_id)
+                credentials = await service._load_credentials(agent_id)
                 if credentials:
                     has_token = bool(credentials.get("access_token"))
                     logger.info(

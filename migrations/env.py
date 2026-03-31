@@ -36,7 +36,7 @@ target_metadata = [Base.metadata]
 # ... etc.
 
 # Lista de tabelas a serem ignoradas na geração automática de migrações
-exclude_tables = ["sessions", "events", "app_states", "user_states", "accounts", "users"]
+exclude_tables = ["sessions", "events", "app_states", "user_states", "users"]
 
 
 def include_object(object, name, type_, reflected, compare_to):

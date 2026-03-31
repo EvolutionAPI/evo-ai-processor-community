@@ -72,7 +72,6 @@ class HubSpotService(MCPOAuthService):
 
     async def complete_authorization(
         self,
-        account_id: str,
         agent_id: str,
         code: str,
         state: str,
@@ -85,7 +84,6 @@ class HubSpotService(MCPOAuthService):
         Overrides parent method to add HubSpot-specific user info retrieval.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             code: Authorization code from OAuth callback
             state: State parameter from OAuth callback
@@ -97,7 +95,6 @@ class HubSpotService(MCPOAuthService):
         """
         # Call parent method to handle OAuth flow
         result = await super().complete_authorization(
-            account_id=account_id,
             agent_id=agent_id,
             code=code,
             state=state,
@@ -110,7 +107,7 @@ class HubSpotService(MCPOAuthService):
             try:
                 access_token = None
                 # Get access token from stored credentials
-                credentials = await self._load_credentials(account_id, agent_id)
+                credentials = await self._load_credentials(agent_id)
                 if credentials:
                     access_token = credentials.get("access_token")
                 
@@ -145,12 +142,11 @@ class HubSpotService(MCPOAuthService):
                             result["user_data"] = user_data
                             
                             # Update stored credentials with user info
-                            existing_credentials = await self._load_credentials(account_id, agent_id)
+                            existing_credentials = await self._load_credentials(agent_id)
                             refresh_token = existing_credentials.get("refresh_token") if existing_credentials else None
                             expires_in = existing_credentials.get("expires_in") if existing_credentials else None
                             
                             await self._store_credentials(
-                                account_id=account_id,
                                 agent_id=agent_id,
                                 mcp_url=self.mcp_url,
                                 access_token=access_token,
@@ -169,7 +165,6 @@ class HubSpotService(MCPOAuthService):
 
     async def generate_authorization_url(
         self,
-        account_id: str,
         agent_id: str,
         scopes: Optional[list] = None,
     ) -> str:
@@ -180,7 +175,6 @@ class HubSpotService(MCPOAuthService):
         the authorization URL using the discovered authorization server and scopes.
 
         Args:
-            account_id: Account ID
             agent_id: Agent ID
             scopes: Optional list of scopes to request (defaults to all supported scopes)
 
@@ -194,7 +188,6 @@ class HubSpotService(MCPOAuthService):
 
         # Generate authorization URL using parent method
         return await super().generate_authorization_url(
-            account_id=account_id,
             agent_id=agent_id,
             scopes=scopes
         )

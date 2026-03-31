@@ -89,24 +89,12 @@ async def get_jwt_token_ws(token: str, skip_validation: bool = False) -> Optiona
             if auth_response and auth_response.user:
                 # Return user context similar to what middleware does
                 user = auth_response.user.dict() if hasattr(auth_response.user, 'dict') else auth_response.user
-                accounts = [acc.dict() if hasattr(acc, 'dict') else acc for acc in auth_response.accounts] if hasattr(auth_response, 'accounts') else []
-                active_account = None
-                for account in accounts:
-                    account_dict = account.dict() if hasattr(account, 'dict') else account
-                    if account_dict.get("status") == "active":
-                        active_account = account_dict
-                        break
-                
-                if active_account:
-                    return {
-                        "sub": user.get("email") or user.get("id"),
-                        "email": user.get("email"),
-                        "user_id": user.get("id"),
-                        "account_id": active_account.get("id"),
-                        "account": active_account,
-                        "user": user,
-                        "accounts": accounts,
-                    }
+                return {
+                    "sub": user.get("email") or user.get("id"),
+                    "email": user.get("email"),
+                    "user_id": user.get("id"),
+                    "user": user,
+                }
         except Exception as e:
             logger.warning(f"EvoAuth token validation failed: {str(e)}")
             return None
@@ -158,46 +146,9 @@ async def websocket_chat(
             try:
                 payload = await get_jwt_token_ws(auth_data["token"], True)
                 if payload:
-                    account_id = payload.get("account_id")
                     user_id = payload.get("user_id") or payload.get("sub")
-                    
-                    # Verify if the user has access to the agent
-                    # Check if agent belongs to the user's account
-                    # Convert both to string for comparison (agent.account_id is UUID, account_id is string)
-                    agent_account_id_str = str(agent.account_id).lower().strip() if agent.account_id else None
-                    account_id_str = str(account_id).lower().strip() if account_id else None
-                    
-                    logger.info(f"WebSocket auth check: agent.account_id={agent.account_id} (type={type(agent.account_id)}, str={agent_account_id_str}), payload.account_id={account_id} (type={type(account_id)}, str={account_id_str})")
-                    logger.info(f"Comparison: '{agent_account_id_str}' == '{account_id_str}' ? {agent_account_id_str == account_id_str if (agent_account_id_str and account_id_str) else False}")
-                    
-                    if account_id_str and agent_account_id_str and agent_account_id_str == account_id_str:
-                        is_authenticated = True
-                        logger.info(f"✅ WebSocket: User {user_id} authenticated for agent {agent_id} via account {account_id}")
-                    else:
-                        # If account doesn't match, check folder sharing
-                        if agent.folder_id:
-                            user_email = payload.get("email") or payload.get("sub")
-                            if user_email:
-                                has_access = folder_share_service.check_folder_access(
-                                    db, agent.folder_id, user_email, "read"
-                                )
-                                if has_access:
-                                    logger.info(
-                                        f"WebSocket: User {user_email} accessing agent {agent_id} via shared folder {agent.folder_id}"
-                                    )
-                                    is_authenticated = True
-                                else:
-                                    logger.warning(
-                                        f"WebSocket: User {user_email} denied access to shared folder {agent.folder_id}"
-                                    )
-                            else:
-                                logger.warning(
-                                    "WebSocket: No user email found in token payload"
-                                )
-                        else:
-                            logger.warning(
-                                f"WebSocket: Agent {agent_id} account {agent.account_id} doesn't match user account {account_id}"
-                            )
+                    is_authenticated = True
+                    logger.info(f"WebSocket: User {user_id} authenticated for agent {agent_id}")
             except Exception as e:
                 logger.warning(f"Token authentication failed: {str(e)}")
 
@@ -431,7 +382,6 @@ async def websocket_live_chat(
             logger.info(f"Agent details:")
             logger.info(f"  - ID: {agent.id}")
             logger.info(f"  - Name: {agent.name}")
-            logger.info(f"  - Account ID: {agent.account_id}")
             logger.info(f"  - Folder ID: {agent.folder_id}")
             logger.info(f"  - Has config: {bool(agent.config)}")
             if agent.config:
@@ -681,12 +631,12 @@ async def chat(
     db: Session = Depends(get_db),
     _: None = Depends(RequirePermission("ai_agent_processor", "execute")),
 ):
-    account_id = current_user["account_id"]
+    user_id = current_user.get("user_id") or current_user.get("sub") or current_user.get("email")
 
     try:
         final_response = await run_agent_adk(
             agent_id,
-            account_id,
+            user_id,
             request.message,
             session_service,
             artifacts_service,
@@ -712,7 +662,7 @@ async def chat(
             status_code=status.HTTP_404_NOT_FOUND
         )
     except MemoryLimitExceeded as e:
-        logger.warning(f"Memory limit exceeded for account {account_id}: {str(e)}")
+        logger.warning(f"Memory limit exceeded for user {user_id}: {str(e)}")
         return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_402_PAYMENT_REQUIRED),
@@ -720,7 +670,7 @@ async def chat(
             status_code=status.HTTP_402_PAYMENT_REQUIRED
         )
     except SessionLimitExceeded as e:
-        logger.warning(f"Session limit exceeded for account {account_id}: {str(e)}")
+        logger.warning(f"Session limit exceeded for user {user_id}: {str(e)}")
         return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_402_PAYMENT_REQUIRED),

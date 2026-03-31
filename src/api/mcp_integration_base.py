@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, Callable
 from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.orm import Session
 
-from src.api.dependencies import verify_account_access
+from src.api.dependencies import get_current_user
 from src.config.database import get_db
 from src.api.integrations_routes import sanitize_config
 from src.services.agent_service import get_agent_integrations
@@ -24,37 +24,35 @@ logger = logging.getLogger(__name__)
 
 async def get_integration_config(
     db: Session,
-    account_id: str,
     agent_id: str,
     provider: str,
     load_from_service: Optional[Callable] = None
 ) -> Dict[str, Any]:
     """
     Get integration configuration from database or service.
-    
+
     Args:
         db: Database session
-        account_id: Account ID
         agent_id: Agent ID
         provider: Provider name (e.g., 'stripe', 'github')
         load_from_service: Optional service method to load credentials (for backward compatibility)
-        
+
     Returns:
         Configuration dictionary with 'connected' field set based on access_token presence
     """
     # Try to load from database first (preferred method)
-    integrations = await get_agent_integrations(db, agent_id, account_id)
-    
+    integrations = await get_agent_integrations(db, agent_id)
+
     config = None
     for integration in integrations:
         if integration.get("provider", "").lower() == provider.lower():
             config = integration.get("config", {})
             break
-    
+
     # Fallback to service method if database doesn't have it
     if not config and load_from_service:
         logger.debug(f"Config not found in DB for {provider}, loading from service")
-        config = await load_from_service(account_id, agent_id)
+        config = await load_from_service(agent_id)
     
     # Set connected status based on access_token presence
     if config:
@@ -66,7 +64,6 @@ async def get_integration_config(
 
 
 async def get_configuration_endpoint(
-    account_id: str,
     agent_id: str,
     provider: str,
     db: Session,
@@ -74,11 +71,11 @@ async def get_configuration_endpoint(
 ) -> Dict[str, Any]:
     """
     Standard GET /configuration endpoint for MCP integrations.
-    
+
     Returns sanitized configuration without sensitive fields.
     """
     try:
-        config = await get_integration_config(db, account_id, agent_id, provider, load_from_service)
+        config = await get_integration_config(db, agent_id, provider, load_from_service)
         
         if not config:
             return success_response(
@@ -109,7 +106,6 @@ async def get_configuration_endpoint(
 
 
 async def discover_tools_endpoint(
-    account_id: str,
     agent_id: str,
     provider: str,
     mcp_url: str,
@@ -118,21 +114,20 @@ async def discover_tools_endpoint(
 ) -> Dict[str, Any]:
     """
     Standard GET /discover-tools endpoint for MCP integrations.
-    
+
     Discovers tools using stored access_token from database.
     Automatically refreshes token if expired for providers that support refresh tokens.
     """
     try:
         logger.info(
-            f"🔍 Discover Tools - Starting discovery for {provider.upper()}:\n"
-            f"  - Account ID: {account_id}\n"
+            f"Discover Tools - Starting discovery for {provider.upper()}:\n"
             f"  - Agent ID: {agent_id}\n"
             f"  - MCP URL: {mcp_url}\n"
             f"  - Has load_from_service: {bool(load_from_service)}"
         )
-        
+
         # Get integration config from database (with service fallback if provided)
-        config = await get_integration_config(db, account_id, agent_id, provider, load_from_service=load_from_service)
+        config = await get_integration_config(db, agent_id, provider, load_from_service=load_from_service)
         
         if not config:
             logger.warning(
@@ -221,7 +216,6 @@ async def discover_tools_endpoint(
                 from src.services.adk.mcp_servers.hubspot.config import get_hubspot_mcp_config
                 hubspot_config = await get_hubspot_mcp_config(
                     agent_id=agent_id,
-                    account_id=account_id,
                     db=db
                 )
                 if hubspot_config and hubspot_config.get("headers", {}).get("Authorization"):
@@ -287,7 +281,7 @@ def create_mcp_router(
     
     Args:
         provider: Provider name (e.g., 'stripe', 'github')
-        prefix: Router prefix (e.g., '/accounts/{account_id}/agents/{agent_id}/integrations/stripe')
+        prefix: Router prefix (e.g., '/agents/{agent_id}/integrations/stripe')
         tags: Router tags
         service_class: Optional service class (for type hints)
         get_service_func: Optional function to get service instance
@@ -309,10 +303,9 @@ def create_mcp_router(
         }
     )
     async def get_configuration(
-        account_id: str,
         agent_id: str,
         db: Session = Depends(get_db),
-        _: None = Depends(verify_account_access)
+        _: dict = Depends(get_current_user)
     ):
         """Get integration configuration."""
         load_from_service = None
@@ -322,16 +315,16 @@ def create_mcp_router(
             service = get_service_optional_func(request)
             if service and hasattr(service, '_load_credentials'):
                 load_from_service = service._load_credentials
-        
+
         config = await get_configuration_endpoint(
-            account_id, agent_id, provider, db, load_from_service
+            agent_id, provider, db, load_from_service
         )
 
         return success_response(
             data=config,
             message="Configuration retrieved successfully"
         )
-    
+
     # Add GET /discover-tools endpoint if MCP URL is provided
     if mcp_url:
         @router.get(
@@ -343,14 +336,13 @@ def create_mcp_router(
             }
         )
         async def discover_tools(
-            account_id: str,
             agent_id: str,
             db: Session = Depends(get_db),
-            _: None = Depends(verify_account_access)
+            _: dict = Depends(get_current_user)
         ):
             """Discover available MCP tools."""
             tools = await discover_tools_endpoint(
-                account_id, agent_id, provider, mcp_url, db
+                agent_id, provider, mcp_url, db
             )
 
             return success_response(

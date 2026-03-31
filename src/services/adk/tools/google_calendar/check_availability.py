@@ -12,7 +12,6 @@ logger = setup_logger(__name__)
 
 
 def create_check_availability_tool(
-    account_id: Optional[str] = None,
     agent_id: Optional[str] = None,
     calendar_config: Optional[Dict[str, Any]] = None,
     credentials_config: Optional[Dict[str, Any]] = None,
@@ -22,7 +21,6 @@ def create_check_availability_tool(
     Create a tool for checking Google Calendar availability.
 
     Args:
-        account_id: Optional default account ID
         agent_id: Optional default agent ID
         calendar_config: Google Calendar configuration from agent.config.integrations
         credentials_config: Google Calendar credentials from agent.config.integrations
@@ -69,17 +67,10 @@ def create_check_availability_tool(
             logger.debug(f"Calendar config received: {calendar_config}")
             logger.debug(f"Credentials available: {bool(credentials_config)}")
 
-            # Use account_id and agent_id from closure (passed to create_check_availability_tool)
-            effective_account_id = account_id
+            # Use agent_id from closure (passed to create_check_availability_tool)
             effective_agent_id = agent_id
 
             # Validate required parameters
-            if not effective_account_id:
-                return {
-                    "status": "error",
-                    "message": "Account ID is required but was not provided"
-                }
-
             if not effective_agent_id:
                 return {
                     "status": "error",

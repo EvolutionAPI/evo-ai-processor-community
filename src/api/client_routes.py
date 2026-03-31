@@ -74,7 +74,7 @@ async def get_client_usage_summary(
     """
     try:
         # Get usage summary
-        usage_summary = get_usage_summary(db, current_user['accounts'])
+        usage_summary = get_usage_summary(db)
 
         return success_response(
             data=usage_summary,

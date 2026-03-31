@@ -14,7 +14,6 @@ logger = setup_logger(__name__)
 
 
 async def get_linear_mcp_config(
-    account_id: str,
     agent_id: str,
     mcp_url: Optional[str] = None,
     db: Optional[Session] = None
@@ -23,7 +22,6 @@ async def get_linear_mcp_config(
     Get Linear MCP server configuration with OAuth headers and tool filtering.
 
     Args:
-        account_id: Account ID
         agent_id: Agent ID
         mcp_url: Optional custom MCP URL (defaults to Linear MCP)
 
@@ -49,7 +47,7 @@ async def get_linear_mcp_config(
             from src.services.agent_service import get_agent_integrations
             import uuid
             try:
-                integrations = await get_agent_integrations(db, agent_id, account_id)
+                integrations = await get_agent_integrations(db, agent_id)
                 for integration in integrations:
                     if integration.get("provider", "").lower() == "linear":
                         integration_config = integration.get("config", {})
@@ -87,7 +85,6 @@ async def get_linear_mcp_config(
                 provider_name="linear"
             )
             oauth_headers = await oauth_service.get_mcp_headers(
-                account_id=account_id,
                 agent_id=agent_id,
                 mcp_url=url
             )
