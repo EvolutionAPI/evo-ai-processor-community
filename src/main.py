@@ -142,7 +142,7 @@ POSTGRES_CONNECTION_STRING = os.getenv(
 )
 
 # Create database tables
-Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine, checkfirst=True)
 
 API_PREFIX = "/api/v1"
 
