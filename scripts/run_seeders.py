@@ -118,7 +118,7 @@ def main():
     parser.add_argument(
         "--seeders",
         nargs="+",
-        help="Seeders to run: " . join(args.seeders.keys())
+        help="Seeders to run (optional, runs all if omitted)"
     )
     args = parser.parse_args()
 
