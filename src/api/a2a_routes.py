@@ -739,6 +739,7 @@ async def process_a2a_message(
 
     except json.JSONDecodeError:
         return error_response(
+            request=request,
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
             message="Invalid JSON",
             status_code=status.HTTP_400_BAD_REQUEST
@@ -1572,6 +1573,7 @@ async def get_conversation_history(
 
     except json.JSONDecodeError:
         return error_response(
+            request=request,
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
             message="Invalid JSON",
             status_code=status.HTTP_400_BAD_REQUEST
