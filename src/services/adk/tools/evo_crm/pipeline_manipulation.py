@@ -105,6 +105,7 @@ def create_pipeline_manipulation_tool(
         conversation_id: Optional[str] = None,
         pipeline_id: Optional[str] = None,
         stage_id: Optional[str] = None,
+        stage_name: Optional[str] = None,
         notes: Optional[str] = None,
         task_title: Optional[str] = None,
         task_description: Optional[str] = None,
@@ -146,7 +147,8 @@ def create_pipeline_manipulation_tool(
             contact_id: ID of the contact (optional, auto-extracted from context)
             conversation_id: ID of the conversation (optional, auto-extracted from context)
             pipeline_id: ID of the pipeline (optional if only one pipeline is configured)
-            stage_id: ID of the stage to move to (required for move_to_stage)
+            stage_id: ID of the stage to move to (for move_to_stage, use stage_id OR stage_name)
+            stage_name: Name of the stage to move to (alternative to stage_id, e.g. "Em Progresso")
             notes: Optional notes for the action
             task_title: Title for the task (required for create_task)
             task_description: Description for the task (optional)
@@ -225,6 +227,7 @@ def create_pipeline_manipulation_tool(
                     stage_id=stage_id,
                     notes=notes,
                     pipeline_rules=available_pipeline_rules,
+                    stage_name=stage_name,
                 )
 
             elif action == 'create_task':
@@ -434,6 +437,7 @@ async def _move_to_stage(
     stage_id: Optional[str],
     notes: Optional[str],
     pipeline_rules: List[Dict[str, Any]],
+    stage_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Move a contact to a different pipeline stage."""
 
@@ -444,10 +448,23 @@ async def _move_to_stage(
             "action": "move_to_stage",
         }
 
+    # Resolve stage_id from stage_name if not provided directly
+    if not stage_id and stage_name and pipeline_rules:
+        pipeline_rule = next((r for r in pipeline_rules if r.get("pipelineId") == pipeline_id), None)
+        if pipeline_rule:
+            for s in pipeline_rule.get("stages", []):
+                if s.get("stageName", "").lower().strip() == stage_name.lower().strip():
+                    stage_id = s.get("stageId")
+                    logger.info(f"Resolved stage_id from name '{stage_name}': {stage_id}")
+                    break
+
     if not stage_id:
+        # List available stages for the user
+        pipeline_rule = next((r for r in pipeline_rules if r.get("pipelineId") == pipeline_id), None)
+        available = ", ".join([s.get("stageName", "?") for s in pipeline_rule.get("stages", [])]) if pipeline_rule else "none"
         return {
             "status": "error",
-            "message": "stage_id is required to move to a different stage.",
+            "message": f"stage_id or stage_name is required. Available stages: {available}",
             "action": "move_to_stage",
         }
 
@@ -472,7 +489,7 @@ async def _move_to_stage(
         if notes:
             request_body["notes"] = notes
 
-        response = await client.post(
+        response = await client.patch(
             endpoint=endpoint,
             json_data=request_body,
         )
