@@ -117,8 +117,11 @@ class EvoAuthService:
                 logger.error(f"Raw response data: {response_data}")
                 return None
                 
-        except (NetworkError, AuthenticationError):
-            # These are expected errors - just re-raise
+        except AuthenticationError:
+            # Token is invalid - return None to allow fallback to Agent API Key
+            return None
+        except NetworkError:
+            # Network errors should be re-raised
             raise
         except Exception as e:
             logger.error(f"Unexpected error during token validation: {e}")

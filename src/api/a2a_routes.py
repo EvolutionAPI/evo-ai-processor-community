@@ -652,7 +652,7 @@ async def process_a2a_message(
         logger.info(f"🤖 Agent Bot authentication already validated by middleware")
 
     # Verify agent exists
-    agent = get_agent(db, agent_id)
+    agent = await get_agent(db, agent_id)
     if not agent:
         return error_response(
             request=request,
@@ -869,7 +869,7 @@ async def handle_message_send(
             )
 
         # Validate that agent supports push notifications
-        agent = get_agent(db, agent_id)
+        agent = await get_agent(db, agent_id)
         if not agent:
             return error_response(
                 request=request,
@@ -1189,7 +1189,7 @@ async def get_agent_card(
 
     logger.info(f"📋 Getting agent card for {agent_id}")
 
-    agent = get_agent(db, agent_id)
+    agent = await get_agent(db, agent_id)
     if not agent:
         return error_response(
             request=request,
@@ -1328,7 +1328,7 @@ async def list_agent_sessions(
     await verify_api_key(db, request, x_api_key)
 
     # Verify agent exists
-    agent = get_agent(db, agent_id)
+    agent = await get_agent(db, agent_id)
     if not agent:
         return error_response(
             request=request,
@@ -1391,7 +1391,7 @@ async def get_session_history(
     await verify_api_key(db, request, x_api_key)
 
     # Verify agent exists
-    agent = get_agent(db, agent_id)
+    agent = await get_agent(db, agent_id)
     if not agent:
         return error_response(
             request=request,
@@ -1446,7 +1446,7 @@ async def get_conversation_history(
     await verify_api_key(db, request, x_api_key)
 
     # Verify agent exists
-    agent = get_agent(db, agent_id)
+    agent = await get_agent(db, agent_id)
     if not agent:
         return error_response(
             request=request,
@@ -2161,7 +2161,7 @@ async def handle_agent_authenticated_extended_card(
 
     try:
         # Get agent from database
-        agent = get_agent(db, agent_id)
+        agent = await get_agent(db, agent_id)
         if not agent:
             return JSONResponse(
                 content={
