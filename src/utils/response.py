@@ -189,7 +189,7 @@ def error_response(
         error=error_info,
         meta=MetaInfoError(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            path=request.path,
+            path=str(request.url.path),
             method=request.method
         )
     )

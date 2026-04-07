@@ -64,20 +64,22 @@ def create_send_private_message_tool() -> FunctionTool:
         conversation_id: Optional[str] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
-        """Send a private message (reminder) in a conversation.
+        """Send a PRIVATE internal note (reminder) in a conversation. NOT visible to customers.
 
-        Use this tool when:
-        - The user requests to set a reminder
-        - You need to create an internal note for other agents
-        - You want to leave a private message about the conversation
-        - The agent configuration allows reminders ("permitir registrar lembretes")
+        IMPORTANT: This tool is ONLY for creating internal notes and reminders for human agents.
+        NEVER use this tool to respond to customers. To respond to the customer, simply reply
+        with your message text directly - do NOT use any tool.
 
-        Private messages are only visible to agents and not shown to customers.
-        They are useful for:
-        - Setting reminders for follow-ups
-        - Leaving notes about customer preferences
-        - Recording important context for future interactions
-        - Agent-to-agent communication
+        Use this tool ONLY when:
+        - The user explicitly asks you to set a reminder or leave a note
+        - You need to create an internal note for human agents (not visible to the customer)
+        - You want to record internal context that should NOT be sent to the customer
+
+        DO NOT use this tool when:
+        - You want to reply to the customer's message
+        - You want to send a greeting or reengagement message
+        - You want to answer the customer's question
+        For all customer-facing responses, simply reply with text directly without using any tool.
 
         Args:
             content: The content of the private message/reminder (required)
@@ -210,24 +212,26 @@ def create_send_private_message_tool() -> FunctionTool:
     
     # Set function metadata for better tool description
     send_private_message.__name__ = "send_private_message"
-    send_private_message.__doc__ = """Send a private message (reminder) in a conversation.
-    
-    Private messages are only visible to agents and not shown to customers.
-    Use this tool to create reminders, internal notes, or agent-to-agent communication.
-    
+    send_private_message.__doc__ = """Send a PRIVATE internal note (reminder) in a conversation. NOT visible to customers.
+
+    IMPORTANT: This is ONLY for internal notes/reminders for human agents. NEVER use this to respond to customers.
+    To reply to the customer, simply respond with text directly without using any tool.
+
     When to use:
-    - User requests to set a reminder
-    - Need to create internal notes for other agents
+    - User explicitly asks to set a reminder or leave a note
+    - Need to create internal notes for human agents
     - Want to leave private context about the conversation
-    - Agent configuration allows reminders
-    
+
+    When NOT to use:
+    - Responding to a customer message (just reply with text directly)
+    - Sending greeting or reengagement messages (just reply with text directly)
+    - Any customer-facing communication
+
     Args:
-        content: The content of the private message/reminder (required)
-                Can be plain text or HTML formatted
-        conversation_id: The ID of the conversation to send the message in (optional,
-                       will be automatically extracted from conversation context)
-        tool_context: The tool context containing session information (automatically provided)
-    
+        content: The content of the private note/reminder (required)
+        conversation_id: The conversation ID (optional, auto-extracted from context)
+        tool_context: The tool context (automatically provided)
+
     Returns:
         Dictionary with message status and details
     """
