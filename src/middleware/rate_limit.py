@@ -147,10 +147,10 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         logger.info(f"Global rate limiter initialized: {requests_per_second} RPS, burst {burst}")
     
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health endpoints
-        if request.url.path in ["/health", "/ready", "/healthz"]:
+        # Skip OPTIONS (CORS preflight) and health endpoints
+        if request.method == "OPTIONS" or request.url.path in ["/health", "/ready", "/healthz"]:
             return await call_next(request)
-        
+
         if not self.limiter.consume(1):
             return JSONResponse(
                 status_code=429,
@@ -160,7 +160,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                     "retry_after": "30 seconds"
                 }
             )
-        
+
         return await call_next(request)
 
 
@@ -193,10 +193,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return f"ip_{client_ip}"
     
     async def dispatch(self, request: Request, call_next):
-        # Skip rate limiting for health endpoints
-        if request.url.path in ["/health", "/ready", "/healthz"]:
+        # Skip OPTIONS (CORS preflight) and health endpoints
+        if request.method == "OPTIONS" or request.url.path in ["/health", "/ready", "/healthz"]:
             return await call_next(request)
-        
+
         client_id = self._get_client_id(request)
         
         if not self.limiter.allow(client_id):
