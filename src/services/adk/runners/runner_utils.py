@@ -184,7 +184,7 @@ class RunnerUtils:
             SessionLimitExceeded: If session limit is exceeded
         """
         # Check session count limit
-        allowed, message = check_session_limit(self.db, user_id)
+        allowed, message = check_session_limit(self.db)
         if not allowed:
             logger.warning(f"Session limit exceeded for user {user_id}: {message}")
             raise SessionLimitExceeded(message)
