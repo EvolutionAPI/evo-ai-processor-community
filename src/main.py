@@ -102,21 +102,21 @@ app = FastAPI(
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(BaseAPIException, base_api_exception_handler)
 
-# CORS configuration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins in development
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # EvoAuth middleware for authentication and user context
 app.add_middleware(
     EvoAuthMiddleware
 )
 
-# Rate limiting middleware - order matters: global first, then per-client
+# CORS - added after other middlewares so it wraps them (last added = first executed in Starlette)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Rate limiting middleware
 app.add_middleware(
     GlobalRateLimitMiddleware,
     requests_per_second=settings.RATE_LIMIT_GLOBAL_RPS,
