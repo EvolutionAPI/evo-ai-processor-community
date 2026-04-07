@@ -198,6 +198,15 @@ class EvoCrmClient:
         """
         return await self._make_request("PUT", endpoint, params, json_data)
 
+    async def patch(
+        self,
+        endpoint: str,
+        json_data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Make a PATCH request to the CRM API."""
+        return await self._make_request("PATCH", endpoint, params, json_data)
+
     async def delete(
         self,
         endpoint: str,
