@@ -119,13 +119,6 @@ class Settings(BaseSettings):
     PORT: int = int(os.getenv("PORT", 8000))
     DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
 
-    # CORS settings
-    CORS_ORIGINS: List[str] = (
-        os.getenv("CORS_ORIGINS", "*").split(",") 
-        if os.getenv("CORS_ORIGINS", "*") != "*" 
-        else ["*"]
-    )
-
     # Langfuse / OpenTelemetry settings
     LANGFUSE_PUBLIC_KEY: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     LANGFUSE_SECRET_KEY: str = os.getenv("LANGFUSE_SECRET_KEY", "")
