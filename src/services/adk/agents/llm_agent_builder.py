@@ -52,7 +52,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from .agent_utils import get_sub_agents, get_api_key, sanitize_for_formatting
 from src.services.apikey_service import get_api_key_record
-from src.services.oauth_codex_service import get_fresh_token
+from src.services.oauth_codex_service import get_fresh_token, get_raw_oauth_tokens, write_chatgpt_auth_json
 from src.config.oauth_constants import CODEX_API_BASE
 
 logger = setup_logger(__name__)
@@ -1026,13 +1026,33 @@ class LlmAgentBuilder:
                 except Exception as e:
                     logger.error(f"❌ Error calling to_function_declaration() on {mcp_tools[0].name}: {e}")
         
-        # Check if this agent uses an OAuth Codex key for api_base override
-        llm_model_kwargs = {"model": agent.model, "api_key": api_key}
+        # Check if this agent uses an OAuth Codex key
+        is_oauth_codex = False
         if hasattr(agent, "api_key_id") and agent.api_key_id:
             key_record = get_api_key_record(self.db, agent.api_key_id)
             if key_record and key_record.auth_type == "oauth_codex":
-                llm_model_kwargs["api_base"] = CODEX_API_BASE
-                logger.info(f"Using OAuth Codex api_base for agent {agent.name}")
+                is_oauth_codex = True
+
+        if is_oauth_codex:
+            # LiteLLM's chatgpt/ provider IGNORES api_key parameter.
+            # It reads from ~/.config/litellm/chatgpt/auth.json.
+            # We write the user's OAuth tokens there before each call.
+            tokens = get_raw_oauth_tokens(self.db, agent.api_key_id)
+            if not tokens or not tokens.get("access_token"):
+                raise ValueError(
+                    f"OAuth Codex tokens not available for agent {agent.name}. "
+                    "Please re-authenticate via the device code flow."
+                )
+            write_chatgpt_auth_json(tokens)
+
+            # Use chatgpt/ prefix so LiteLLM handles endpoint + headers correctly
+            model_name = agent.model
+            if not model_name.startswith("chatgpt/"):
+                model_name = f"chatgpt/{model_name.split('/')[-1]}"
+            llm_model_kwargs = {"model": model_name}
+            logger.info(f"Using OAuth Codex (auth.json) for agent {agent.name}, model={model_name}")
+        else:
+            llm_model_kwargs = {"model": agent.model, "api_key": api_key}
 
         llm_agent_kwargs = {
             "name": agent.name,

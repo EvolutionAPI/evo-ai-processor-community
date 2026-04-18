@@ -396,3 +396,65 @@ async def _get_account_info(access_token: str) -> Optional[dict]:
 
     logger.warning(f"Account info request failed: {response.status_code}")
     return None
+
+
+# ---------------------------------------------------------------------------
+# Utility functions for LiteLLM chatgpt/ provider integration
+# ---------------------------------------------------------------------------
+
+def get_raw_oauth_tokens(db: Session, key_id: uuid.UUID) -> Optional[dict]:
+    """Get decrypted OAuth token dict for writing to LiteLLM's auth.json.
+
+    Returns dict with: access_token, refresh_token, expires_at, account_id
+    or None if key not found/inactive.
+    """
+    from src.models.models import ApiKey
+    from src.utils.crypto import decrypt_oauth_data
+
+    key = db.query(ApiKey).filter(
+        ApiKey.id == key_id,
+        ApiKey.is_active == True,
+    ).first()
+
+    if not key or not key.oauth_data:
+        return None
+
+    return decrypt_oauth_data(key.oauth_data)
+
+
+def write_chatgpt_auth_json(tokens: dict) -> None:
+    """Write OAuth tokens to LiteLLM's chatgpt auth.json file.
+
+    LiteLLM's chatgpt/ provider reads credentials from this file
+    instead of accepting api_key parameter. This function writes
+    the user's tokens so LiteLLM can use them.
+
+    Thread safety: uses file locking (fcntl) to prevent concurrent writes.
+    """
+    import fcntl
+
+    token_dir = os.environ.get(
+        "CHATGPT_TOKEN_DIR",
+        os.path.expanduser("~/.config/litellm/chatgpt"),
+    )
+    auth_file = os.environ.get("CHATGPT_AUTH_FILE", "auth.json")
+    auth_path = os.path.join(token_dir, auth_file)
+    lock_path = auth_path + ".lock"
+
+    os.makedirs(token_dir, exist_ok=True)
+
+    auth_data = {
+        "access_token": tokens.get("access_token", ""),
+        "refresh_token": tokens.get("refresh_token", ""),
+        "expires_at": tokens.get("expires_at", 0),
+        "account_id": tokens.get("account_id", ""),
+    }
+
+    with open(lock_path, "w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            with open(auth_path, "w") as f:
+                json.dump(auth_data, f)
+            logger.debug(f"Wrote chatgpt auth.json to {auth_path}")
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)

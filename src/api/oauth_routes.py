@@ -30,14 +30,14 @@
 import os
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from pydantic import UUID4
+from typing import Optional
 
 from src.config.database import get_db
 from src.api.dependencies import get_current_user
 from src.schemas.schemas import (
-    OAuthDeviceCodeRequest,
     OAuthDeviceCodeResponse,
     OAuthDevicePollRequest,
     OAuthDevicePollResponse,
@@ -69,15 +69,29 @@ router = APIRouter(
     description="Initiates the OAuth 2.0 device code flow for OpenAI Codex authentication.",
 )
 async def start_device_code(
-    request: OAuthDeviceCodeRequest,
+    name: str = "OpenAI Codex",
+    x_client_id: Optional[str] = Header(None, alias="x-client-id"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Start the OAuth device code flow for OpenAI Codex."""
+    """Start the OAuth device code flow for OpenAI Codex.
+
+    The client_id is taken from x-client-id header (same pattern as other endpoints).
+    If not provided, a deterministic UUID is derived from the authenticated user's ID.
+    """
+    if x_client_id:
+        try:
+            client_uuid = uuid.UUID(x_client_id)
+        except ValueError:
+            client_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(x_client_id))
+    else:
+        user_id = current_user.get("user_id", current_user.get("id", "default"))
+        client_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(user_id))
+
     result = await start_device_code_flow(
         db=db,
-        client_id=request.client_id,
-        name=request.name,
+        client_id=client_uuid,
+        name=name,
     )
     return OAuthDeviceCodeResponse(**result)
 
