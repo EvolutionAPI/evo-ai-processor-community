@@ -32,7 +32,7 @@ import os
 # OpenAI Codex OAuth Configuration
 CODEX_CLIENT_ID = os.getenv(
     "CODEX_OAUTH_CLIENT_ID",
-    "app_codex"  # Default OpenAI Codex client ID
+    "app_EMoamEEZ73f0CkXaXp7hrann"  # OpenAI Codex public client ID
 )
 
 # OAuth Endpoints
@@ -60,7 +60,7 @@ CODEX_API_BASE = os.getenv(
 # OAuth Scopes
 CODEX_SCOPES = os.getenv(
     "CODEX_SCOPES",
-    "openai.organization.read openai.responses.read openai.responses.write"
+    "openid profile email offline_access"
 )
 
 # Grant type for device code flow
