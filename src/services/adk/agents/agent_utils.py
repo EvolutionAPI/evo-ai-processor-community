@@ -31,7 +31,9 @@ from typing import List, Tuple, Optional
 import uuid
 from google.adk.agents.llm_agent import LlmAgent
 from src.services.adk.tools.exit_loop import ExitLoopAgent
-from src.services.apikey_service import get_decrypted_api_key
+from src.services.apikey_service import get_decrypted_api_key, get_api_key_record
+from src.services.oauth_codex_service import get_fresh_token
+from src.config.oauth_constants import CODEX_API_BASE
 from src.utils.logger import setup_logger
 from src.core.exceptions import AgentNotFoundError
 from src.services.agent_service import get_agent
@@ -109,7 +111,7 @@ async def get_sub_agents(
                 agent.config = {}
             agent.config["enable_exit_loop"] = True
             logger.info(
-                f"✅ Enabled exit_loop tool for sub-agent {agent.name} (ID: {sub_agent_id_str}) in {parent_type} parent"
+                f"Enabled exit_loop tool for sub-agent {agent.name} (ID: {sub_agent_id_str}) in {parent_type} parent"
             )
 
         try:
@@ -182,11 +184,31 @@ async def get_sub_agents(
 
 
 async def get_api_key(db: Session, agent: Agent) -> str:
-    """Get the API key for the agent."""
+    """Get the API key for the agent.
+    
+    Supports both traditional static API keys and OAuth Codex tokens.
+    For OAuth Codex keys, fetches a fresh access token (refreshing if needed).
+    """
     api_key = None
 
     # Get API key from api_key_id
     if hasattr(agent, "api_key_id") and agent.api_key_id:
+        # First check if this is an OAuth Codex key
+        key_record = get_api_key_record(db, agent.api_key_id)
+        if key_record and key_record.auth_type == "oauth_codex":
+            # Handle OAuth Codex key - get fresh token
+            access_token, account_id = await get_fresh_token(db, agent.api_key_id)
+            if access_token:
+                logger.info(f"Using OAuth Codex token for agent {agent.name}")
+                return access_token
+            else:
+                logger.error(f"OAuth Codex token unavailable for agent {agent.name}")
+                raise ValueError(
+                    f"OAuth Codex token for key {agent.api_key_id} is not available. "
+                    f"Please re-authenticate via the device code flow."
+                )
+
+        # Standard API key flow
         if decrypted_key := get_decrypted_api_key(db, agent.api_key_id):
             logger.info(f"Using stored API key for agent {agent.name}")
             api_key = decrypted_key

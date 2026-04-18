@@ -28,7 +28,7 @@
 """
 
 from src.models.models import ApiKey
-from src.utils.crypto import decrypt_api_key
+from src.utils.crypto import decrypt_api_key, encrypt_api_key
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException, status
@@ -53,6 +53,22 @@ def get_api_key(db: Session, key_id: uuid.UUID) -> Optional[ApiKey]:
         )
 
 
+def get_api_key_record(db: Session, key_id: uuid.UUID) -> Optional[ApiKey]:
+    """Get the full API key ORM object by ID.
+    
+    Unlike get_api_key, this is explicitly named to indicate
+    it returns the full ORM record including auth_type and oauth_data.
+    """
+    try:
+        return db.query(ApiKey).filter(ApiKey.id == key_id).first()
+    except SQLAlchemyError as e:
+        logger.error(f"Error getting API key record {key_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error getting API key record",
+        )
+
+
 def get_decrypted_api_key(db: Session, key_id: uuid.UUID, agent: Optional['Agent'] = None) -> Optional[str]:
     """Get the decrypted value of an API key
     
@@ -66,6 +82,10 @@ def get_decrypted_api_key(db: Session, key_id: uuid.UUID, agent: Optional['Agent
             
         if not key or not key.is_active:
             logger.warning(f"API key {key_id} not found or inactive")
+            return None
+
+        # OAuth Codex keys do not have a static encrypted key
+        if key.auth_type == "oauth_codex":
             return None
             
         # If agent is provided and it's a shared agent scenario,

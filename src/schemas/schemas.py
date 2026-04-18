@@ -38,11 +38,45 @@ class ApiKey(BaseModel):
     id: UUID4
     name: str
     provider: str
+    auth_type: str = "api_key"
     created_at: datetime
     updated_at: Optional[datetime] = None
     is_active: bool
+    oauth_connected: Optional[bool] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class OAuthDeviceCodeRequest(BaseModel):
+    client_id: UUID4
+    name: str
+
+
+class OAuthDeviceCodeResponse(BaseModel):
+    user_code: str
+    verification_uri: str
+    expires_in: int
+    interval: int
+    key_id: UUID4
+
+
+class OAuthDevicePollRequest(BaseModel):
+    key_id: UUID4
+
+
+class OAuthDevicePollResponse(BaseModel):
+    status: str
+    key_id: Optional[UUID4] = None
+    message: Optional[str] = None
+
+
+class OAuthStatusResponse(BaseModel):
+    key_id: UUID4
+    connected: bool
+    expires_at: Optional[datetime] = None
+    account_id: Optional[str] = None
+    plan_type: Optional[str] = None
+
 
 class AgentBase(BaseModel):
     name: Optional[str] = Field(

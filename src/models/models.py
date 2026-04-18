@@ -319,7 +319,9 @@ class ApiKey(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, nullable=False)
     provider = Column(String, nullable=False)
-    key = Column(String, nullable=False)  # Correct column name from database
+    key = Column(String, nullable=True)  # Nullable for OAuth-based keys
+    auth_type = Column(String(20), nullable=False, server_default="api_key")
+    oauth_data = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     is_active = Column(Boolean, default=True)
@@ -370,4 +372,3 @@ class ExecutionMetrics(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     agent = relationship("Agent", backref="execution_metrics")
-

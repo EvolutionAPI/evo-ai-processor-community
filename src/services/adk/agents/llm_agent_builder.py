@@ -51,6 +51,9 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from .agent_utils import get_sub_agents, get_api_key, sanitize_for_formatting
+from src.services.apikey_service import get_api_key_record
+from src.services.oauth_codex_service import get_fresh_token
+from src.config.oauth_constants import CODEX_API_BASE
 
 logger = setup_logger(__name__)
 
@@ -1023,9 +1026,17 @@ class LlmAgentBuilder:
                 except Exception as e:
                     logger.error(f"❌ Error calling to_function_declaration() on {mcp_tools[0].name}: {e}")
         
+        # Check if this agent uses an OAuth Codex key for api_base override
+        llm_model_kwargs = {"model": agent.model, "api_key": api_key}
+        if hasattr(agent, "api_key_id") and agent.api_key_id:
+            key_record = get_api_key_record(self.db, agent.api_key_id)
+            if key_record and key_record.auth_type == "oauth_codex":
+                llm_model_kwargs["api_base"] = CODEX_API_BASE
+                logger.info(f"Using OAuth Codex api_base for agent {agent.name}")
+
         llm_agent_kwargs = {
             "name": agent.name,
-            "model": LiteLlm(model=agent.model, api_key=api_key),
+            "model": LiteLlm(**llm_model_kwargs),
             "instruction": formatted_prompt,
             "description": agent.description,
             "tools": all_tools,

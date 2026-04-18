@@ -1,10 +1,10 @@
 """
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ @author: Davidson Gomes                                                      │
-│ @file: crypto.py                                                             │
-│ Developed by: Davidson Gomes                                                 │
-│ Creation date: May 13, 2025                                                  │
-│ Contact: contato@evolution-api.com                                           │
+│ @author: Neriton Dias                                                        │
+│ @file: oauth_constants.py                                                    │
+│ Developed by: Neriton Dias                                                   │
+│ Creation date: Apr 18, 2026                                                  │
+│ Contact: neriton.dias@live.com                                               │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ @copyright © Evolution API 2025. All rights reserved.                        │
 │ Licensed under the Apache License, Version 2.0                               │
@@ -27,55 +27,46 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from cryptography.fernet import Fernet
-from dotenv import load_dotenv
-import json
-import logging
 import os
 
-logger = logging.getLogger(__name__)
+# OpenAI Codex OAuth Configuration
+CODEX_CLIENT_ID = os.getenv(
+    "CODEX_OAUTH_CLIENT_ID",
+    "app_codex"  # Default OpenAI Codex client ID
+)
 
-load_dotenv()
+# OAuth Endpoints
+CODEX_DEVICE_AUTH_URL = os.getenv(
+    "CODEX_DEVICE_AUTH_URL",
+    "https://auth.openai.com/oauth/device/code"
+)
 
-# Load the encryption key from environment (shared with evo-ai-core-service)
-# This must be a 32 URL-safe base64-encoded bytes key
-SECRET_KEY = os.getenv("ENCRYPTION_KEY")
-if not SECRET_KEY:
-    raise ValueError("ENCRYPTION_KEY environment variable is required")
+CODEX_TOKEN_URL = os.getenv(
+    "CODEX_TOKEN_URL",
+    "https://auth.openai.com/oauth/token"
+)
 
-# Create the Fernet object with the key
-fernet = Fernet(SECRET_KEY.encode() if isinstance(SECRET_KEY, str) else SECRET_KEY)
+CODEX_USERINFO_URL = os.getenv(
+    "CODEX_USERINFO_URL",
+    "https://api.openai.com/v1/me"
+)
 
+# API Base URL for Codex-authenticated requests
+CODEX_API_BASE = os.getenv(
+    "CODEX_API_BASE",
+    "https://api.openai.com/v1"
+)
 
-def decrypt_api_key(encrypted_key: str) -> str:
-    """Decrypt an API key for use"""
-    if not encrypted_key:
-        return ""
-    try:
-        return fernet.decrypt(encrypted_key.encode()).decode()
-    except Exception as e:
-        logger.error(f"Error decrypting API key: {str(e)}")
-        raise
+# OAuth Scopes
+CODEX_SCOPES = os.getenv(
+    "CODEX_SCOPES",
+    "openai.organization.read openai.responses.read openai.responses.write"
+)
 
+# Grant type for device code flow
+CODEX_GRANT_TYPE_DEVICE = "urn:ietf:params:oauth:grant-type:device_code"
+CODEX_GRANT_TYPE_REFRESH = "refresh_token"
 
-def encrypt_api_key(plain_key: str) -> str:
-    """Encrypt an API key for storage"""
-    if not plain_key:
-        return ""
-    return fernet.encrypt(plain_key.encode()).decode()
-
-
-def encrypt_oauth_data(oauth_dict: dict) -> str:
-    """Encrypt OAuth token data for secure storage"""
-    if not oauth_dict:
-        return ""
-    json_str = json.dumps(oauth_dict)
-    return fernet.encrypt(json_str.encode()).decode()
-
-
-def decrypt_oauth_data(encrypted_data: str) -> dict:
-    """Decrypt OAuth token data from storage"""
-    if not encrypted_data:
-        return {}
-    json_str = fernet.decrypt(encrypted_data.encode()).decode()
-    return json.loads(json_str)
+# Polling intervals and timeouts
+CODEX_DEFAULT_POLL_INTERVAL = 5  # seconds
+CODEX_DEVICE_CODE_EXPIRY = 900  # 15 minutes
