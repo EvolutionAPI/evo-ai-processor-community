@@ -79,6 +79,7 @@ import src.api.hubspot_routes
 import src.api.paypal_routes
 import src.api.canva_routes
 import src.api.integrations_routes
+import src.api.oauth_routes
 
 # Add the root directory to PYTHONPATH
 root_dir = Path(__file__).parent.parent
@@ -178,6 +179,7 @@ paypal_router = src.api.paypal_routes.router
 paypal_callback_router = src.api.paypal_routes.callback_router
 canva_router = src.api.canva_routes.router
 canva_callback_router = src.api.canva_routes.callback_router
+oauth_router = src.api.oauth_routes.router
 integrations_router = src.api.integrations_routes.router
 
 # Include routes
@@ -211,6 +213,7 @@ app.include_router(paypal_router, prefix=API_PREFIX)
 app.include_router(paypal_callback_router, prefix=API_PREFIX)
 app.include_router(canva_router, prefix=API_PREFIX)
 app.include_router(canva_callback_router, prefix=API_PREFIX)
+app.include_router(oauth_router, prefix=API_PREFIX)
 app.include_router(integrations_router, prefix=API_PREFIX)
 
 # System routes (health and ready) - without API prefix for Kubernetes compatibility

@@ -56,7 +56,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
-    prefix="/oauth/codex",
+    prefix="/agents/oauth/codex",
     tags=["oauth-codex"],
 )
 
