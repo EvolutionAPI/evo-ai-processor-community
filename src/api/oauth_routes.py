@@ -38,14 +38,14 @@ from typing import Optional
 from src.config.database import get_db
 from src.api.dependencies import get_current_user
 from src.schemas.schemas import (
-    OAuthDeviceCodeResponse,
-    OAuthDevicePollRequest,
-    OAuthDevicePollResponse,
+    OAuthAuthStartRequest,
+    OAuthAuthStartResponse,
+    OAuthAuthCompleteRequest,
     OAuthStatusResponse,
 )
 from src.services.oauth_codex_service import (
-    start_device_code_flow,
-    poll_device_code,
+    generate_auth_url,
+    complete_auth_flow,
     get_oauth_status,
     disconnect_oauth,
     get_fresh_token,
@@ -61,59 +61,57 @@ router = APIRouter(
 )
 
 
+def client_id_from_header_or_user(
+    x_client_id: Optional[str], current_user: dict
+) -> uuid.UUID:
+    """Resolve a client UUID from the x-client-id header or fall back to the user."""
+    if x_client_id:
+        try:
+            return uuid.UUID(x_client_id)
+        except ValueError:
+            return uuid.uuid5(uuid.NAMESPACE_DNS, str(x_client_id))
+    user_id = current_user.get("user_id", current_user.get("id", "default"))
+    return uuid.uuid5(uuid.NAMESPACE_DNS, str(user_id))
+
+
 @router.post(
-    "/device-code",
-    response_model=OAuthDeviceCodeResponse,
+    "/auth-start",
+    response_model=OAuthAuthStartResponse,
     status_code=status.HTTP_200_OK,
-    summary="Start OAuth Codex device code flow",
-    description="Initiates the OAuth 2.0 device code flow for OpenAI Codex authentication.",
+    summary="Start OAuth Codex PKCE browser flow",
+    description="Generates an authorization URL for the OAuth 2.0 PKCE browser flow for OpenAI Codex authentication.",
 )
-async def start_device_code(
-    name: str = "OpenAI Codex",
+async def auth_start(
+    request: OAuthAuthStartRequest,
     x_client_id: Optional[str] = Header(None, alias="x-client-id"),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Start the OAuth device code flow for OpenAI Codex.
+    """Start the OAuth PKCE browser flow for OpenAI Codex.
 
     The client_id is taken from x-client-id header (same pattern as other endpoints).
     If not provided, a deterministic UUID is derived from the authenticated user's ID.
     """
-    if x_client_id:
-        try:
-            client_uuid = uuid.UUID(x_client_id)
-        except ValueError:
-            client_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(x_client_id))
-    else:
-        user_id = current_user.get("user_id", current_user.get("id", "default"))
-        client_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, str(user_id))
-
-    result = await start_device_code_flow(
-        db=db,
-        client_id=client_uuid,
-        name=name,
+    result = await generate_auth_url(
+        db, client_id_from_header_or_user(x_client_id, current_user), request.name
     )
-    return OAuthDeviceCodeResponse(**result)
+    return OAuthAuthStartResponse(**result)
 
 
 @router.post(
-    "/device-poll",
-    response_model=OAuthDevicePollResponse,
+    "/auth-complete",
     status_code=status.HTTP_200_OK,
-    summary="Poll OAuth Codex device code status",
-    description="Polls the OAuth device code flow to check if the user has authorized the application.",
+    summary="Complete OAuth Codex PKCE browser flow",
+    description="Exchanges the authorization callback URL for tokens to complete the PKCE flow.",
 )
-async def poll_device(
-    request: OAuthDevicePollRequest,
+async def auth_complete(
+    request: OAuthAuthCompleteRequest,
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Poll for device code authorization status."""
-    result = await poll_device_code(
-        db=db,
-        key_id=request.key_id,
-    )
-    return OAuthDevicePollResponse(**result)
+    """Complete the PKCE browser flow by exchanging the callback URL for tokens."""
+    result = await complete_auth_flow(db, request.key_id, request.callback_url)
+    return result
 
 
 @router.get(

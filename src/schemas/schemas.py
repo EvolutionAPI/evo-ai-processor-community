@@ -47,26 +47,23 @@ class ApiKey(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class OAuthDeviceCodeRequest(BaseModel):
-    client_id: UUID4
-    name: str
+class OAuthAuthStartRequest(BaseModel):
+    name: str = "OpenAI Codex"
 
 
-class OAuthDeviceCodeResponse(BaseModel):
-    user_code: str
-    verification_uri: str
-    expires_in: int
-    interval: int
+class OAuthAuthStartResponse(BaseModel):
+    authorize_url: str
     key_id: UUID4
 
 
-class OAuthDevicePollRequest(BaseModel):
+class OAuthAuthCompleteRequest(BaseModel):
     key_id: UUID4
+    callback_url: str
 
 
-class OAuthDevicePollResponse(BaseModel):
+class OAuthAuthCompleteResponse(BaseModel):
     status: str
-    key_id: Optional[UUID4] = None
+    key_id: str
     message: Optional[str] = None
 
 

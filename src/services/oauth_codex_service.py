@@ -27,11 +27,17 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
+import hashlib
 import httpx
+import json
 import logging
+import os
+import secrets
 import uuid
+import base64
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
+from urllib.parse import urlencode, urlparse, parse_qs
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException, status
@@ -40,66 +46,44 @@ from src.models.models import ApiKey
 from src.utils.crypto import encrypt_oauth_data, decrypt_oauth_data
 from src.config.oauth_constants import (
     CODEX_CLIENT_ID,
-    CODEX_DEVICE_AUTH_URL,
     CODEX_TOKEN_URL,
     CODEX_USERINFO_URL,
     CODEX_SCOPES,
-    CODEX_GRANT_TYPE_DEVICE,
     CODEX_GRANT_TYPE_REFRESH,
-    CODEX_DEFAULT_POLL_INTERVAL,
 )
 
 logger = logging.getLogger(__name__)
 
 
-async def start_device_code_flow(
+# ---------------------------------------------------------------------------
+# PKCE Browser Flow
+# ---------------------------------------------------------------------------
+
+
+async def generate_auth_url(
     db: Session,
     client_id: uuid.UUID,
     name: str,
 ) -> dict:
     """
-    Start the OAuth device code flow for OpenAI Codex.
-    Creates an ApiKey record in 'pending' state and returns the device code info.
+    Generate an OAuth authorization URL using PKCE (S256).
+    Creates an ApiKey record in 'pending' state and returns the URL + key_id.
     """
-    # Request device code from OpenAI
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            CODEX_DEVICE_AUTH_URL,
-            data={
-                "client_id": CODEX_CLIENT_ID,
-                "scope": CODEX_SCOPES,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
+    code_verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(code_verifier.encode()).digest()
+    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    state = secrets.token_urlsafe(32)
 
-    if response.status_code != 200:
-        logger.error(f"Device code request failed: {response.status_code} {response.text}")
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to start device code flow: {response.text}",
-        )
-
-    device_data = response.json()
-
-    # Create an ApiKey record in pending state
-    oauth_pending_data = {
-        "device_code": device_data.get("device_code"),
-        "status": "pending",
-        "requested_at": datetime.now(timezone.utc).isoformat(),
-        "expires_in": device_data.get("expires_in", 900),
-        "interval": device_data.get("interval", CODEX_DEFAULT_POLL_INTERVAL),
-    }
-
-    encrypted_oauth = encrypt_oauth_data(oauth_pending_data)
+    pending = encrypt_oauth_data({"pending_verifier": code_verifier, "state": state})
 
     api_key_record = ApiKey(
         id=uuid.uuid4(),
-        name=name,
-        provider="openai",
+        name=name.strip() or "OpenAI Codex",
+        provider="openai-codex",
         key=None,
         auth_type="oauth_codex",
-        oauth_data=encrypted_oauth,
-        is_active=False,  # Not active until token is obtained
+        oauth_data=pending,
+        is_active=False,
     )
 
     try:
@@ -114,133 +98,122 @@ async def start_device_code_flow(
             detail="Error creating OAuth API key record",
         )
 
-    return {
-        "user_code": device_data.get("user_code"),
-        "verification_uri": device_data.get("verification_uri")
-        or device_data.get("verification_url", "https://platform.openai.com/device"),
-        "expires_in": device_data.get("expires_in", 900),
-        "interval": device_data.get("interval", CODEX_DEFAULT_POLL_INTERVAL),
-        "key_id": api_key_record.id,
+    params = {
+        "response_type": "code",
+        "client_id": CODEX_CLIENT_ID,
+        "redirect_uri": "http://localhost:1455/auth/callback",
+        "scope": CODEX_SCOPES,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+        "codex_cli_simplified_flow": "true",
     }
+    url = f"https://auth.openai.com/oauth/authorize?{urlencode(params)}"
+    return {"authorize_url": url, "key_id": api_key_record.id}
 
 
-async def poll_device_code(
+async def complete_auth_flow(
     db: Session,
     key_id: uuid.UUID,
+    callback_url: str,
 ) -> dict:
     """
-    Poll for the device code token. Returns status and token info if ready.
+    Complete the PKCE flow by exchanging the authorization code for tokens.
     """
-    api_key_record = db.query(ApiKey).filter(ApiKey.id == key_id).first()
-    if not api_key_record:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="API key record not found",
-        )
+    key = db.query(ApiKey).filter(ApiKey.id == key_id).first()
+    if not key or not key.oauth_data:
+        raise ValueError("Key not found")
 
-    if api_key_record.auth_type != "oauth_codex":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="API key is not an OAuth Codex key",
-        )
+    pending = decrypt_oauth_data(key.oauth_data)
+    code_verifier = pending.get("pending_verifier")
+    if not code_verifier:
+        raise ValueError("No pending verifier found")
 
-    oauth_data = decrypt_oauth_data(api_key_record.oauth_data)
-    if not oauth_data or oauth_data.get("status") not in ("pending",):
-        if oauth_data.get("status") == "connected":
-            return {"status": "connected", "key_id": key_id, "message": "Already connected"}
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid OAuth state: {oauth_data.get('status', 'unknown')}",
-        )
+    parsed = urlparse(callback_url)
+    params = parse_qs(parsed.query)
+    code = params.get("code", [None])[0]
+    if not code:
+        raise ValueError("No authorization code in callback URL")
 
-    device_code = oauth_data.get("device_code")
-    if not device_code:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No device code found in OAuth data",
-        )
-
-    # Check expiry
-    requested_at = datetime.fromisoformat(oauth_data["requested_at"])
-    expires_in = oauth_data.get("expires_in", 900)
-    if datetime.now(timezone.utc) > requested_at + timedelta(seconds=expires_in):
-        oauth_data["status"] = "expired"
-        api_key_record.oauth_data = encrypt_oauth_data(oauth_data)
-        db.commit()
-        return {"status": "expired", "message": "Device code has expired. Please start a new flow."}
-
-    # Poll the token endpoint
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
             CODEX_TOKEN_URL,
             data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "http://localhost:1455/auth/callback",
                 "client_id": CODEX_CLIENT_ID,
-                "grant_type": CODEX_GRANT_TYPE_DEVICE,
-                "device_code": device_code,
+                "code_verifier": code_verifier,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
+        resp.raise_for_status()
+        tokens = resp.json()
 
-    token_data = response.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token", "")
+    id_token = tokens.get("id_token", "")
+    account_id = _extract_account_id(id_token) or _extract_account_id(access_token) or ""
+    expires_at = _extract_token_expiry(access_token)
 
-    if response.status_code == 200 and "access_token" in token_data:
-        # Success - store the tokens
-        oauth_connected_data = {
-            "status": "connected",
-            "access_token": token_data["access_token"],
-            "refresh_token": token_data.get("refresh_token"),
-            "token_type": token_data.get("token_type", "Bearer"),
-            "expires_in": token_data.get("expires_in"),
-            "connected_at": datetime.now(timezone.utc).isoformat(),
-        }
+    oauth_data = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "id_token": id_token,
+        "expires_at": expires_at,
+        "account_id": account_id,
+        "plan_type": "plus",
+    }
+    key.oauth_data = encrypt_oauth_data(oauth_data)
+    key.is_active = True
+    db.commit()
+    return {"status": "ok", "key_id": str(key_id), "message": "Connected successfully"}
 
-        # Calculate token expiry
-        if token_data.get("expires_in"):
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=token_data["expires_in"])
-            oauth_connected_data["expires_at"] = expires_at.isoformat()
 
-        # Try to get account info
-        try:
-            account_info = await _get_account_info(token_data["access_token"])
-            if account_info:
-                oauth_connected_data["account_id"] = account_info.get("id")
-                oauth_connected_data["account_email"] = account_info.get("email")
-                oauth_connected_data["plan_type"] = account_info.get("plan_type")
-        except Exception as e:
-            logger.warning(f"Could not fetch account info: {e}")
+# ---------------------------------------------------------------------------
+# Token helpers
+# ---------------------------------------------------------------------------
 
-        api_key_record.oauth_data = encrypt_oauth_data(oauth_connected_data)
-        api_key_record.is_active = True
-        db.commit()
 
-        return {
-            "status": "connected",
-            "key_id": key_id,
-            "message": "Successfully connected to OpenAI Codex",
-        }
+def _extract_account_id(token: str) -> Optional[str]:
+    """Try to extract the account / org id from a JWT token (access_token or id_token)."""
+    if not token:
+        return None
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        payload = parts[1]
+        # Fix base64 padding
+        payload += "=" * (4 - len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload))
+        return decoded.get("org_id") or decoded.get("sub") or decoded.get("account_id")
+    except Exception:
+        return None
 
-    # Handle pending/slow_down states
-    error = token_data.get("error", "")
-    if error == "authorization_pending":
-        return {"status": "pending", "message": "Waiting for user authorization..."}
-    elif error == "slow_down":
-        return {"status": "slow_down", "message": "Polling too fast. Please slow down."}
-    elif error == "expired_token":
-        oauth_data["status"] = "expired"
-        api_key_record.oauth_data = encrypt_oauth_data(oauth_data)
-        db.commit()
-        return {"status": "expired", "message": "Device code has expired."}
-    elif error == "access_denied":
-        oauth_data["status"] = "denied"
-        api_key_record.oauth_data = encrypt_oauth_data(oauth_data)
-        db.commit()
-        return {"status": "denied", "message": "User denied the authorization request."}
-    else:
-        logger.error(f"Unexpected token response: {token_data}")
-        return {
-            "status": "error",
-            "message": f"Unexpected error: {error or 'unknown'}",
-        }
+
+def _extract_token_expiry(token: str) -> Optional[str]:
+    """Try to extract the expiry (exp) from a JWT token and return as ISO string."""
+    if not token:
+        return None
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None
+        payload = parts[1]
+        payload += "=" * (4 - len(payload) % 4)
+        decoded = json.loads(base64.urlsafe_b64decode(payload))
+        exp = decoded.get("exp")
+        if exp:
+            return datetime.fromtimestamp(exp, tz=timezone.utc).isoformat()
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Status, disconnect, fresh-token (kept from original)
+# ---------------------------------------------------------------------------
 
 
 async def get_oauth_status(
@@ -265,7 +238,7 @@ async def get_oauth_status(
 
     result = {
         "key_id": key_id,
-        "connected": oauth_data.get("status") == "connected",
+        "connected": bool(oauth_data.get("access_token")),
     }
 
     if oauth_data.get("expires_at"):
@@ -322,7 +295,7 @@ async def get_fresh_token(
         return None, None
 
     oauth_data = decrypt_oauth_data(api_key_record.oauth_data)
-    if oauth_data.get("status") != "connected":
+    if not oauth_data.get("access_token"):
         return None, None
 
     access_token = oauth_data.get("access_token")
@@ -380,21 +353,6 @@ async def _refresh_access_token(refresh_token: str) -> Optional[dict]:
         return response.json()
 
     logger.error(f"Token refresh failed: {response.status_code} {response.text}")
-    return None
-
-
-async def _get_account_info(access_token: str) -> Optional[dict]:
-    """Get account information from OpenAI using the access token."""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(
-            CODEX_USERINFO_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-
-    if response.status_code == 200:
-        return response.json()
-
-    logger.warning(f"Account info request failed: {response.status_code}")
     return None
 
 

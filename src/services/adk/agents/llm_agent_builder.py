@@ -1034,22 +1034,17 @@ class LlmAgentBuilder:
                 is_oauth_codex = True
 
         if is_oauth_codex:
-            # LiteLLM's chatgpt/ provider IGNORES api_key parameter.
-            # It reads from ~/.config/litellm/chatgpt/auth.json.
-            # We write the user's OAuth tokens there before each call.
             tokens = get_raw_oauth_tokens(self.db, agent.api_key_id)
             if not tokens or not tokens.get("access_token"):
                 raise ValueError(
-                    f"OAuth Codex tokens not available for agent {agent.name}. "
-                    "Please re-authenticate via the device code flow."
+                    "OAuth Codex tokens not available"
                 )
             write_chatgpt_auth_json(tokens)
 
-            # Use chatgpt/ prefix so LiteLLM handles endpoint + headers correctly
             model_name = agent.model
             if not model_name.startswith("chatgpt/"):
                 model_name = f"chatgpt/{model_name.split('/')[-1]}"
-            llm_model_kwargs = {"model": model_name}
+            llm_model_kwargs = {"model": model_name}  # NO api_key, NO api_base
             logger.info(f"Using OAuth Codex (auth.json) for agent {agent.name}, model={model_name}")
         else:
             llm_model_kwargs = {"model": agent.model, "api_key": api_key}
