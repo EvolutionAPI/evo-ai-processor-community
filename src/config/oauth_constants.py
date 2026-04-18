@@ -36,6 +36,11 @@ CODEX_CLIENT_ID = os.getenv(
 )
 
 # OAuth Endpoints
+CODEX_AUTH_URL = os.getenv(
+    "CODEX_AUTH_URL",
+    "https://auth.openai.com/oauth/authorize"
+)
+
 CODEX_DEVICE_AUTH_URL = os.getenv(
     "CODEX_DEVICE_AUTH_URL",
     "https://auth.openai.com/oauth/device/code"
@@ -57,11 +62,26 @@ CODEX_API_BASE = os.getenv(
     "https://api.openai.com/v1"
 )
 
-# OAuth Scopes
+# Redirect URI for the PKCE browser flow. Must match what the user will see
+# in the OpenAI callback (http://localhost:1455/auth/callback by default,
+# which matches the upstream Codex CLI and is therefore accepted by
+# auth.openai.com for the public Codex client).
+CODEX_REDIRECT_URI = os.getenv(
+    "CODEX_REDIRECT_URI",
+    "http://localhost:1455/auth/callback"
+)
+
+# OAuth Scopes. Aligned with the upstream Codex CLI so the id_token carries
+# the organization claims needed by _extract_account_id() and so that future
+# Codex features (api.connectors.*) work without a re-consent.
 CODEX_SCOPES = os.getenv(
     "CODEX_SCOPES",
-    "openid profile email offline_access"
+    "openid profile email offline_access api.connectors.read api.connectors.invoke"
 )
+
+# When true, auth.openai.com adds organization claims (org_id, account_id)
+# to the id_token. Required for multi-tenant ChatGPT accounts.
+CODEX_ID_TOKEN_ADD_ORGS = os.getenv("CODEX_ID_TOKEN_ADD_ORGS", "true").lower() in ("1", "true", "yes")
 
 # Grant type for device code flow
 CODEX_GRANT_TYPE_DEVICE = "urn:ietf:params:oauth:grant-type:device_code"
