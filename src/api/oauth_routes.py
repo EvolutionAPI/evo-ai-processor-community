@@ -27,7 +27,10 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from fastapi import APIRouter, Depends, status
+import os
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from pydantic import UUID4
 
@@ -45,6 +48,7 @@ from src.services.oauth_codex_service import (
     poll_device_code,
     get_oauth_status,
     disconnect_oauth,
+    get_fresh_token,
 )
 
 import logging
@@ -135,3 +139,26 @@ async def disconnect(
         key_id=key_id,
     )
     return result
+
+
+@router.post(
+    "/internal/token/{key_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Internal token retrieval for CRM service-to-service calls",
+    description="Internal endpoint for CRM service-to-service OAuth token retrieval. Authenticated via x-api-token header.",
+)
+async def get_internal_token(
+    key_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """Internal endpoint for CRM service-to-service token retrieval.
+    Authenticated via EVOAI_CRM_API_TOKEN header.
+    """
+    api_token = request.headers.get("x-api-token")
+    expected = os.getenv("EVOAI_CRM_API_TOKEN", "")
+    if not api_token or api_token != expected:
+        raise HTTPException(status_code=401, detail="Invalid service token")
+
+    access_token, account_id = await get_fresh_token(db, key_id)
+    return {"access_token": access_token, "account_id": account_id}
