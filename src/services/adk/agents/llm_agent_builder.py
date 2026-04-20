@@ -71,40 +71,9 @@ class GeminiWithApiKey(Gemini):
     def _live_api_client(self):
         from google.genai import Client, types
 
-        # from google.oauth2 import service_account
-
-        # info = {
-        #     "type": "service_account",
-        #     "project_id": "evolution-api-433821",
-        #     "private_key_id": "5236356aff88e5736dfeffdf25fe422cda076904",
-        #     "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQCfND41g0JIzV6a\naBm1Ee2lbPQHz+ZGkmQOXI7cimiDYwhYCeAn2ejJrYcULqLWPVhdRH/8s62HpylH\nu31Jce4oejcdiN+nKsrnuoo1OHxyeULr5Tla8FAqVuuGJwrqIRgQG8Qq7IVmlQtX\nGfYtqEaZ4lA/sk5SOKlBiMpFWpmVj0zdtrFmpiXH/A136Q2zwZ2iqiZbmUJ4OSx+\nmTKyVL/xzHTVFSnhbX12o4wrfjDWvwm7o9bL8nI7gvb+DzFA/VmoldwLUK/X8Smc\nw+O2DdrrCubxR9I0Qi/PGT5vTxQpXtVdTFv0I3KOAhxWyUOF0BpyUycl5survBni\n+zurTdnrAgMBAAECggEAA94SYjd4QaJDjiFI6lpkBmiTsu0epMiYFrYqq3ZlxCgI\nIxgUNFo3tCHSJoaY6jMVikZ9Me5LPy3YzhvxtQk49v7hh4cHRnQKM9LLvCDFzhpW\n9ecCZuq7d9CL6mhvVq2HuKVl6gkHWvDHI7AheQYdxiCFmyHQv7ukhiImgLWhnK6i\nlKiE97yOwUpWVE9E4780WZTFAbFE4j6LFjPxR9RrvzFpTBqWn8qspKaK75/toLuA\nLDNu2aaU+7ZCG8AW+MGcBb0kpQtNfGB1wxu6YbE5zJssM1jGYGaN3/QHha3OQfat\nTb/WCEYGtTZNVC/i3lzbxoFAQIHp82mH0AN0kWiG+QKBgQDfk2N1SaHjEF6eD/C1\nvRDW3yXyKgFFaaCuXNxQ8ZzDt+f8EKiksboAL24Pp0t7XL0j0nnJjoslTdeXV1HJ\nUeyD649DQt2bIvhUNcXUR+Dt2PNcNgZ2Nj6ae8K1W80CLAKA47bPvO8pgsWqEIYb\neZ9OT9jN0Z8gZZ3j2J4vfWN0xQKBgQC2SvPFfQOE+yURajqlP4ktGBr5znW9jcZo\np26XC/Q4XrVuL24FSAJheVuFJ1XazGjydCg/EHirNn21Hm1JwcdRzxzR4i0dXarX\n1h6iCfxaKoTUn+BUPucFYIBEOdHkn/6qKLfVM0nTZ8m6smNauaaG1Dsxw7Ig+RM4\nxY45eH3e7wKBgQCW41vuXkFZg0S4HD3yCaWBvpxXcS3mcME2rAksv8Ny+30fSwbm\nD+ReF6SJ//gbS52CvZvgAcm65WwpAY969UVQSvwnAsuY1eMOwjO/brtJCnBDvVpj\nEXzyua/QwiH740PVRNmuHe6y70UD358Cj/SJ362MSnrAXJRQn3Myzcb/mQKBgQCf\nABNOX3NRa2lynjCW8CsrTQpCd8WU13OG1vuL/h4/iMRBXlddfeitspeUNbIaDQ9A\n4vYzw58s33OYJfj3S3EaN0eQ/fGR2qBocFf5yDH3R3zipKybbt48f2aBm9kqzC7p\npmhqKrkrDy0SjgRBHwtUMQuMpX/aaMZOT2p1UFahuwKBgQCxbga+XD69QuQAyI4m\na7HhUV/8B6C2PLH6zg/sLKfFmIX0Xrg1N9ffaRoN4OdofAJRRGY2Y1rKq80hSjEA\nuRHix64NvLwDQtmqorxBwgmtf5axIFSTnUAN9B4if78ik76kp1TCvtOgUsa8hu8+\n7cG6qAiuPZS8Eqv+RAO1fqbvGA==\n-----END PRIVATE KEY-----\n",
-        #     "client_email": "evo-ai@evolution-api-433821.iam.gserviceaccount.com",
-        #     "client_id": "104060719980706869243",
-        #     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        #     "token_uri": "https://oauth2.googleapis.com/token",
-        #     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        #     "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/evo-ai%40evolution-api-433821.iam.gserviceaccount.com",
-        #     "universe_domain": "googleapis.com",
-        # }
-
-        # SCOPES = [
-        #     "https://www.googleapis.com/auth/cloud-platform",
-        #     "https://www.googleapis.com/auth/generative-language.retriever",
-        # ]
-
-        # creds = service_account.Credentials.from_service_account_info(
-        #     info, scopes=SCOPES
-        # )
-
-        # use v1alpha for using API KEY from Google AI Studio
         api_version = "v1alpha"
-        # api_version = "v1beta"
         return Client(
             api_key=self.api_key,
-            # credentials=creds,
-            # vertexai=True,
-            # project="evolution-api-433821",
-            # location="us-central1",
             http_options=types.HttpOptions(
                 headers=self._tracking_headers, api_version=api_version
             ),
