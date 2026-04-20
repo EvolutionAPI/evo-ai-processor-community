@@ -71,40 +71,9 @@ class GeminiWithApiKey(Gemini):
     def _live_api_client(self):
         from google.genai import Client, types
 
-        # from google.oauth2 import service_account
-
-        # info = {
-        #     "type": "service_account",
-        #     "project_id": "evolution-api-433821",
-        #     "private_key_id": "***REMOVED-KEY-ID***",
-        #     "private_key": "***REMOVED-PRIVATE-KEY***\n",
-        #     "client_email": "***REMOVED-SERVICE-ACCOUNT***",
-        #     "client_id": "***REMOVED-CLIENT-ID***",
-        #     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        #     "token_uri": "https://oauth2.googleapis.com/token",
-        #     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-        #     "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/***REMOVED-SERVICE-ACCOUNT***",
-        #     "universe_domain": "googleapis.com",
-        # }
-
-        # SCOPES = [
-        #     "https://www.googleapis.com/auth/cloud-platform",
-        #     "https://www.googleapis.com/auth/generative-language.retriever",
-        # ]
-
-        # creds = service_account.Credentials.from_service_account_info(
-        #     info, scopes=SCOPES
-        # )
-
-        # use v1alpha for using API KEY from Google AI Studio
         api_version = "v1alpha"
-        # api_version = "v1beta"
         return Client(
             api_key=self.api_key,
-            # credentials=creds,
-            # vertexai=True,
-            # project="evolution-api-433821",
-            # location="us-central1",
             http_options=types.HttpOptions(
                 headers=self._tracking_headers, api_version=api_version
             ),
