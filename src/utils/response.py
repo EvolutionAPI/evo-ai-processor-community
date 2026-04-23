@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from fastapi import Request
 
+from src.utils.json_encoder import SafeJSONResponse
+
 # Import error codes for mapping
 try:
     from src.core.error_codes import (
@@ -125,7 +127,7 @@ def success_response(
         message=message
     )
     
-    return JSONResponse(
+    return SafeJSONResponse(
         status_code=status_code,
         content=response.model_dump(exclude_none=True)
     )
@@ -194,7 +196,7 @@ def error_response(
         )
     )
         
-    return JSONResponse(
+    return SafeJSONResponse(
         status_code=status_code,
         content=response.model_dump(exclude_none=True)
     )
@@ -248,7 +250,7 @@ def paginated_response(
         message=message
     )
     
-    return JSONResponse(
+    return SafeJSONResponse(
         status_code=status_code,
         content=response.model_dump(exclude_none=True)
     )

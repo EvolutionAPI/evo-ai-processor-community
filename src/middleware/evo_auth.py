@@ -29,6 +29,7 @@
 
 from fastapi import Request
 import uuid
+from typing import Optional
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
@@ -37,6 +38,7 @@ from src.services import agent_service
 from src.config.database import get_db
 from src.utils.http import HttpUtils
 from src.utils.logger import setup_logger
+from src.utils.response import error_response
 
 logger = setup_logger(__name__)
 
@@ -107,7 +109,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
         # Extract token
         token, token_type = self._extract_token(request)
         if not token:
-            return self._unauthorized_response("No authentication token provided")
+            return self._unauthorized_response(request, "No authentication token provided")
         
         # Validate with auth service
         try:
@@ -153,7 +155,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                     finally:
                         db.close()
                 
-                return self._unauthorized_response("Invalid or expired token")
+                return self._unauthorized_response(request, "Invalid or expired token")
             
             # Detect if this is an Agent API Key
             is_agent_api_key = token_type == "api_access_token" and self._is_agent_token(auth_response)
@@ -168,6 +170,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                         f"Requested agent: {agent_id}"
                     )
                     return self._forbidden_response(
+                        request,
                         "Agent API Key can only access its own agent resources"
                     )
                 
@@ -184,13 +187,10 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                         logger.warning(
                             f"EvoAuth: Invalid Agent Bot API key for agent {agent_id}"
                         )
-                        return JSONResponse(
-                            status_code=401,
-                            content={
-                                "error": "Invalid API key",
-                                "code": "ERR_INVALID_API_KEY",
-                                "message": "The provided API key is invalid or expired",
-                            },
+                        return self._unauthorized_response(
+                            request,
+                            "The provided API key is invalid or expired",
+                            details={"auth_method": "agent_api_key"},
                         )
 
                     # Create a minimal user context for Agent Bot
@@ -256,14 +256,30 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
             
         except AuthenticationError as e:
-            return self._unauthorized_response(str(e))
-        except NetworkError as e:
-            return self._service_unavailable_response(str(e))
-        except ServiceUnavailableError as e:
-            return self._service_unavailable_response(str(e))
+            return self._unauthorized_response(request, str(e))
+        except (NetworkError, ServiceUnavailableError) as e:
+            details = {
+                "upstream_service": getattr(e, "upstream_service", None) or "evo_auth",
+                "upstream_url": getattr(e, "url", None),
+                "error_type": getattr(e, "error_type", None) or "unknown",
+                "error_class": getattr(e, "original_exception_class", None) or type(e).__name__,
+            }
+            user_message = (
+                "Authentication service is temporarily unavailable. "
+                "Please try again in a moment."
+            )
+            return self._service_unavailable_response(request, user_message, details=details)
         except Exception as e:
-            logger.error(f"Unexpected error in EvoAuth middleware: {e}")
-            return self._service_unavailable_response("Authentication service error")
+            logger.exception(f"Unexpected error in EvoAuth middleware: {e}")
+            return self._service_unavailable_response(
+                request,
+                "Authentication service error",
+                details={
+                    "upstream_service": "evo_auth",
+                    "error_type": "unknown",
+                    "error_class": type(e).__name__,
+                },
+            )
     
     def _should_skip(self, path: str) -> bool:
         """Check if path should skip authentication"""
@@ -363,35 +379,42 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
         token_agent_id = self._get_token_agent_id(auth_response)
         return token_agent_id and str(token_agent_id) == str(requested_agent_id)
     
-    def _unauthorized_response(self, message: str) -> JSONResponse:
-        """Return consistent 401 response"""
-        return JSONResponse(
+    def _unauthorized_response(self, request: Request, message: str, details: Optional[dict] = None) -> JSONResponse:
+        """Return consistent 401 response in the processor standard shape."""
+        return error_response(
+            request=request,
+            code="UNAUTHORIZED",
+            message=message,
+            details=details,
             status_code=401,
-            content={
-                "error": "Unauthorized",
-                "code": "ERR_UNAUTHORIZED",
-                "message": message
-            }
         )
-    
-    def _forbidden_response(self, message: str) -> JSONResponse:
-        """Return 403 response for permission denied"""
-        return JSONResponse(
+
+    def _forbidden_response(self, request: Request, message: str, details: Optional[dict] = None) -> JSONResponse:
+        """Return 403 response for permission denied."""
+        return error_response(
+            request=request,
+            code="FORBIDDEN",
+            message=message,
+            details=details,
             status_code=403,
-            content={
-                "error": "Forbidden",
-                "code": "ERR_FORBIDDEN",
-                "message": message
-            }
         )
-    
-    def _service_unavailable_response(self, message: str) -> JSONResponse:
-        """Return 503 when auth service is down"""
-        return JSONResponse(
+
+    def _service_unavailable_response(
+        self,
+        request: Request,
+        message: str,
+        details: Optional[dict] = None,
+    ) -> JSONResponse:
+        """Return 503 when an upstream service (auth, core, etc.) is unreachable.
+
+        Prefer passing `details` with upstream context (service name, url,
+        error_type, error_class) so developers can diagnose the failure from
+        the response body without tailing logs.
+        """
+        return error_response(
+            request=request,
+            code="UPSTREAM_UNAVAILABLE",
+            message=message,
+            details=details,
             status_code=503,
-            content={
-                "error": "Service Unavailable",
-                "code": "ERR_SERVICE_UNAVAILABLE",
-                "message": message
-            }
         )

@@ -26,6 +26,9 @@ from src.core.error_codes import (
     TIMEOUT_ERROR
 )
 from src.utils.response import error_response
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 def map_status_to_error_code(status_code: int) -> str:
@@ -77,6 +80,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         error_details = exc.detail.get("details")
     
     return error_response(
+        request=request,
         code=error_code,
         message=error_message,
         details=error_details,
@@ -102,11 +106,31 @@ async def base_api_exception_handler(request: Request, exc: BaseAPIException) ->
     
     error_message = str(exc.detail.get("error", exc.detail)) if isinstance(exc.detail, dict) else str(exc.detail)
     error_details = exc.detail.get("details") if isinstance(exc.detail, dict) else None
-    
+
     return error_response(
+        request=request,
         code=error_code,
         message=error_message,
         details=error_details,
         status_code=exc.status_code
+    )
+
+
+async def generic_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Last-resort handler for any unhandled exception.
+
+    Converts the exception into the standardized error response shape so that
+    DevTools / clients get structured diagnostic context (error_class, path)
+    instead of a bare ``Internal Server Error``. Individual routes can still
+    catch and enrich their own exceptions; this handler is the safety net.
+    """
+    logger.exception(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
+
+    return error_response(
+        request=request,
+        code=INTERNAL_ERROR,
+        message="An internal error occurred while processing the request.",
+        details={"error_class": type(exc).__name__},
+        status_code=500,
     )
 

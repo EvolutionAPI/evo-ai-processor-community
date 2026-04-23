@@ -45,7 +45,8 @@ from fastapi.exceptions import HTTPException
 from src.core.exceptions import BaseAPIException
 from src.core.exception_handlers import (
     http_exception_handler,
-    base_api_exception_handler
+    base_api_exception_handler,
+    generic_exception_handler,
 )
 
 setup_result = setup_otel()
@@ -101,6 +102,9 @@ app = FastAPI(
 # Register exception handlers for standardized error responses
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(BaseAPIException, base_api_exception_handler)
+# Catch-all so unhandled exceptions still return the standardized shape with
+# diagnostic context (error_class, path) instead of a bare 500 body.
+app.add_exception_handler(Exception, generic_exception_handler)
 
 # EvoAuth middleware for authentication and user context
 app.add_middleware(

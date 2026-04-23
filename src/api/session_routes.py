@@ -639,6 +639,11 @@ async def get_agent_messages(
                             except Exception as e:
                                 logger.error(f"Error encoding bytes to base64: {str(e)}")
                                 d[key] = None
+                        elif isinstance(value, (set, frozenset)):
+                            # Google ADK emits set-typed fields (e.g. artifact_delta)
+                            # that json.dumps can't serialize — flatten here as well
+                            # as in SafeJSONResponse so the payload is safe either way.
+                            d[key] = process_dict(list(value))
                         elif isinstance(value, dict):
                             process_dict(value)
                         elif isinstance(value, list):
@@ -655,6 +660,8 @@ async def get_agent_messages(
                                     f"Error encoding bytes to base64 in list: {str(e)}"
                                 )
                                 d[i] = None
+                        elif isinstance(item, (set, frozenset)):
+                            d[i] = process_dict(list(item))
                         elif isinstance(item, (dict, list)):
                             process_dict(item)
                 return d
