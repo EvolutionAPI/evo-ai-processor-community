@@ -792,12 +792,10 @@ async def handle_message_send(
     # Extract message from params
     message = params.get("message")
     if not message:
-        return error_response(
-            request=request,
-            code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid params",
-            status_code=status.HTTP_400_BAD_REQUEST,
-            details={
+        # JSON-RPC error envelope per A2A spec — same shape as tasks/get and
+        # tasks/cancel sibling handlers.
+        return SafeJSONResponse(
+            content={
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {
@@ -805,7 +803,7 @@ async def handle_message_send(
                     "message": "Invalid params",
                     "data": {"missing": "message"},
                 },
-            }
+            },
         )
 
     # Extract configuration from params (A2A spec: configuration is optional)
@@ -832,12 +830,8 @@ async def handle_message_send(
 
         # Validate push notification config according to A2A spec (support both url and webhookUrl)
         if not webhook_url:
-            return error_response(
-                request=request,
-                code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-                message="Invalid params",
-                status_code=status.HTTP_400_BAD_REQUEST,
-                details={
+            return SafeJSONResponse(
+                content={
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "error": {
@@ -847,17 +841,13 @@ async def handle_message_send(
                             "missing": "pushNotificationConfig.url or pushNotificationConfig.webhookUrl"
                         },
                     },
-                }
+                },
             )
 
         # Validate HTTPS requirement (A2A spec: prevents SSRF attacks)
         if not webhook_url.startswith("https://"):
-            return error_response(
-                request=request,
-                code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-                message="Invalid params",
-                status_code=status.HTTP_400_BAD_REQUEST,
-                details={
+            return SafeJSONResponse(
+                content={
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "error": {
@@ -867,25 +857,21 @@ async def handle_message_send(
                             "error": "pushNotificationConfig.url MUST use HTTPS for security"
                         },
                     },
-                }
+                },
             )
 
         # Validate that agent supports push notifications
         agent = await get_agent(db, agent_id)
         if not agent:
-            return error_response(
-                request=request,
-                code=map_status_to_error_code(status.HTTP_404_NOT_FOUND),
-                message="Agent not found",
-                status_code=status.HTTP_404_NOT_FOUND,
-                details={
+            return SafeJSONResponse(
+                content={
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "error": {
                         "code": -32001,
                         "message": "Agent not found",
                     },
-                }
+                },
             )
 
         # Check agent capabilities for push notification support
@@ -898,12 +884,8 @@ async def handle_message_send(
 
     # Allow empty text if we have files
     if not text and not files:
-        return error_response(
-            request=request,
-            code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
-            message="Invalid params",
-            status_code=status.HTTP_400_BAD_REQUEST,
-            details={
+        return SafeJSONResponse(
+            content={
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {
@@ -911,7 +893,7 @@ async def handle_message_send(
                     "message": "Invalid params",
                     "data": {"missing": "text content or files in message parts"},
                 },
-            }
+            },
         )
 
     # Use default text if only files provided
@@ -1031,12 +1013,11 @@ async def handle_message_send(
 
     except Exception as e:
         logger.error(f"❌ Agent execution error: {e}")
-        return error_response(
-            request=request,
-            code=map_status_to_error_code(status.HTTP_500_INTERNAL_SERVER_ERROR),
-            message="Agent execution failed",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            details={
+        # JSON-RPC error envelope — HTTP 200 per A2A spec; error travels in body.
+        # Mirrors handle_tasks_get / handle_tasks_cancel so bot-runtime can parse
+        # the error_response off any A2A handler uniformly.
+        return SafeJSONResponse(
+            content={
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {
@@ -1044,7 +1025,7 @@ async def handle_message_send(
                     "message": "Agent execution failed",
                     "data": {"error": str(e)},
                 },
-            }
+            },
         )
 
 

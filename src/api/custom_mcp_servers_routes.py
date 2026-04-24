@@ -56,6 +56,7 @@ router = APIRouter(
     }
 )
 async def create_discover_tools(
+    request: Request,
     discover_tools: CustomMCPDiscoverToolsCreate,
     permission: None = Depends(RequirePermission("ai_custom_mcp_servers", "discover")),
     _: dict = Depends(get_current_user),
@@ -87,6 +88,7 @@ async def create_discover_tools(
     except Exception as e:
         logger.error(f"Unexpected error discovering tools: {str(e)}")
         return error_response(
+            request=request,
             code=map_status_to_error_code(status.HTTP_500_INTERNAL_SERVER_ERROR),
             message=f"Error discovering tools: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR

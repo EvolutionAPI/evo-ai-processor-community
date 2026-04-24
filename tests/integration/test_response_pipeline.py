@@ -11,11 +11,18 @@ the test chat's ``GET /sessions/{id}/messages`` endpoint blew up with
 ``TypeError: Object of type set is not JSON serializable`` on exactly this
 shape before SafeJSONResponse was wired into the response helpers.
 
-The a2a flow (AC 2) shares the same helpers, so coverage here implicitly
-covers the WhatsApp channel path as well.
+For AC 2 specifically, ``TestA2AMessageSendErrorEnvelope`` exercises
+``handle_message_send`` directly to guard the JSON-RPC error envelope shape
+the bot-runtime depends on — code-review HIGH-1 found this branch was
+returning the processor's standard error envelope instead, which would have
+broken the WhatsApp channel reply flow on any agent-execution exception.
 """
 
 from __future__ import annotations
+
+import asyncio
+import uuid
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -59,7 +66,7 @@ def _make_app() -> FastAPI:
     async def boom(request: Request):
         return error_response(
             request=request,
-            code="UPSTREAM_UNAVAILABLE",
+            code="EXTERNAL_SERVICE_ERROR",
             message="Authentication service is temporarily unavailable.",
             details={
                 "upstream_service": "evo_auth",
@@ -100,8 +107,101 @@ class TestErrorResponseSurface:
         assert response.status_code == 503
         body = response.json()
         assert body["success"] is False
-        assert body["error"]["code"] == "UPSTREAM_UNAVAILABLE"
+        # Aligned with the registry constant used by map_status_to_error_code(503)
+        # so all 503 paths in the service share one code.
+        assert body["error"]["code"] == "EXTERNAL_SERVICE_ERROR"
         assert body["error"]["details"]["upstream_service"] == "evo_auth"
         assert body["error"]["details"]["error_type"] == "connection_refused"
         assert body["meta"]["path"] == "/boom"
         assert body["meta"]["method"] == "GET"
+
+
+class TestA2AMessageSendErrorEnvelope:
+    """Regression guard for code-review HIGH-1.
+
+    Every other A2A handler (tasks/get, tasks/cancel, push_notification_*)
+    returns a top-level JSON-RPC ``{jsonrpc, id, error}`` envelope on failure.
+    ``handle_message_send`` was returning the processor's standard
+    ``{success, error, meta}`` envelope with the JSON-RPC frame nested under
+    ``details``, which would break ``evo-bot-runtime``'s WhatsApp reply flow
+    (EVO-972 AC #2) on any agent-execution exception. This test pins the
+    envelope shape so the regression cannot return silently.
+    """
+
+    @staticmethod
+    def _read_body(response) -> dict:
+        import json
+        return json.loads(response.body)
+
+    def test_exception_branch_returns_jsonrpc_envelope(self) -> None:
+        from src.api import a2a_routes
+
+        request_id = "req-abc-123"
+        agent_id = uuid.uuid4()
+        params = {
+            "message": {
+                "messageId": "msg-1",
+                "parts": [{"type": "text", "text": "hello"}],
+            },
+            "contextId": str(uuid.uuid4()),
+            "userId": str(uuid.uuid4()),
+        }
+
+        # Force the agent execution path to fail. ``run_agent`` is the heavy
+        # ADK call; replacing it with a raising AsyncMock drops us straight
+        # into the exception handler we want to characterize.
+        request = AsyncMock(spec=Request)
+        with patch.object(
+            a2a_routes,
+            "run_agent",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ), patch.object(
+            a2a_routes, "extract_conversation_history", new=AsyncMock(return_value=[])
+        ), patch.object(
+            a2a_routes, "extract_history_from_params", return_value=[]
+        ):
+            response = asyncio.run(
+                a2a_routes.handle_message_send(
+                    agent_id=agent_id,
+                    params=params,
+                    request_id=request_id,
+                    request=request,
+                    db=None,
+                )
+            )
+
+        body = self._read_body(response)
+        # JSON-RPC envelope at top level — NOT wrapped in {success, error, meta}
+        assert body["jsonrpc"] == "2.0"
+        assert body["id"] == request_id
+        assert body["error"]["code"] == -32603
+        assert body["error"]["message"] == "Agent execution failed"
+        assert "boom" in body["error"]["data"]["error"]
+        # Negative assertion — the standard processor envelope MUST NOT leak
+        # back into this code path.
+        assert "success" not in body
+        assert "meta" not in body
+
+    def test_missing_message_returns_jsonrpc_envelope(self) -> None:
+        from src.api import a2a_routes
+
+        request_id = "req-missing-msg"
+        agent_id = uuid.uuid4()
+        request = AsyncMock(spec=Request)
+
+        response = asyncio.run(
+            a2a_routes.handle_message_send(
+                agent_id=agent_id,
+                params={},  # no "message" key → triggers the validation branch
+                request_id=request_id,
+                request=request,
+                db=None,
+            )
+        )
+
+        body = self._read_body(response)
+        assert body["jsonrpc"] == "2.0"
+        assert body["id"] == request_id
+        assert body["error"]["code"] == -32602
+        assert body["error"]["data"]["missing"] == "message"
+        assert "success" not in body

@@ -40,6 +40,7 @@ from src.config.settings import settings
 from src.utils.http import HttpUtils
 from src.utils.logger import setup_logger
 from src.utils.response import error_response
+from src.core.error_codes import UNAUTHORIZED, FORBIDDEN, EXTERNAL_SERVICE_ERROR
 
 logger = setup_logger(__name__)
 
@@ -389,7 +390,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
         """Return consistent 401 response in the processor standard shape."""
         return error_response(
             request=request,
-            code="UNAUTHORIZED",
+            code=UNAUTHORIZED,
             message=message,
             details=details,
             status_code=401,
@@ -399,7 +400,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
         """Return 403 response for permission denied."""
         return error_response(
             request=request,
-            code="FORBIDDEN",
+            code=FORBIDDEN,
             message=message,
             details=details,
             status_code=403,
@@ -413,13 +414,15 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
     ) -> JSONResponse:
         """Return 503 when an upstream service (auth, core, etc.) is unreachable.
 
-        Prefer passing `details` with upstream context (service name, url,
-        error_type, error_class) so developers can diagnose the failure from
-        the response body without tailing logs.
+        Uses the registry constant so the code stays consistent with
+        ``map_status_to_error_code(503)`` and other 503 paths in the service.
+        Upstream-specific context (service name, url, error_type, error_class)
+        travels in ``details`` so DevTools / clients can diagnose without
+        tailing logs.
         """
         return error_response(
             request=request,
-            code="UPSTREAM_UNAVAILABLE",
+            code=EXTERNAL_SERVICE_ERROR,
             message=message,
             details=details,
             status_code=503,
