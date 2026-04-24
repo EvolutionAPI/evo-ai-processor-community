@@ -630,6 +630,11 @@ async def get_agent_messages(
                 continue
 
             def process_dict(d):
+                # Defense-in-depth alongside SafeJSONResponse: normalize bytes
+                # (→ base64) and set/frozenset (→ list) anywhere in the tree.
+                # Always returns the (possibly mutated) container so callers can
+                # safely reassign — useful when the input itself is a set/list
+                # that needs to be replaced by its converted form.
                 if isinstance(d, dict):
                     for key, value in list(d.items()):
                         if isinstance(value, bytes):
@@ -639,12 +644,10 @@ async def get_agent_messages(
                             except Exception as e:
                                 logger.error(f"Error encoding bytes to base64: {str(e)}")
                                 d[key] = None
-                        elif isinstance(value, dict):
-                            process_dict(value)
-                        elif isinstance(value, list):
-                            for item in value:
-                                if isinstance(item, (dict, list)):
-                                    process_dict(item)
+                        elif isinstance(value, (set, frozenset)):
+                            d[key] = process_dict(list(value))
+                        elif isinstance(value, (dict, list)):
+                            d[key] = process_dict(value)
                 elif isinstance(d, list):
                     for i, item in enumerate(d):
                         if isinstance(item, bytes):
@@ -655,8 +658,10 @@ async def get_agent_messages(
                                     f"Error encoding bytes to base64 in list: {str(e)}"
                                 )
                                 d[i] = None
+                        elif isinstance(item, (set, frozenset)):
+                            d[i] = process_dict(list(item))
                         elif isinstance(item, (dict, list)):
-                            process_dict(item)
+                            d[i] = process_dict(item)
                 return d
 
             try:

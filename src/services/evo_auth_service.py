@@ -47,12 +47,49 @@ class ValidationError(Exception):
     pass
 
 
-class NetworkError(Exception):
+class _UpstreamError(Exception):
+    """Base for errors talking to an upstream service.
+
+    Carries structured diagnostic context so the middleware / exception
+    handlers can surface it in the response body. Callers using the message
+    form `raise NetworkError("msg")` still work — fields default to None.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        url: Optional[str] = None,
+        error_type: Optional[str] = None,
+        upstream_service: Optional[str] = None,
+        original_exception: Optional[BaseException] = None,
+    ):
+        super().__init__(message)
+        self.url = url
+        self.error_type = error_type
+        self.upstream_service = upstream_service
+        self.original_exception_class = (
+            self._qualified_class_name(original_exception)
+            if original_exception is not None
+            else None
+        )
+
+    @staticmethod
+    def _qualified_class_name(exc: BaseException) -> str:
+        # Distinguish e.g. httpx.ReadTimeout from myapp.ReadTimeout — bare
+        # __name__ collisions across modules are common in transport stacks.
+        cls = type(exc)
+        module = cls.__module__
+        if not module or module == "builtins":
+            return cls.__name__
+        return f"{module}.{cls.__name__}"
+
+
+class NetworkError(_UpstreamError):
     """Raised when network/connectivity issues occur"""
     pass
 
 
-class ServiceUnavailableError(Exception):
+class ServiceUnavailableError(_UpstreamError):
     """Raised when auth service is unavailable"""
     pass
 
@@ -255,15 +292,34 @@ class EvoAuthService:
                 return response.json()
         except httpx.TimeoutException as e:
             logger.error(f"EvoAuth: Request timeout for POST {endpoint}: {e}")
-            raise NetworkError("Request timeout")
+            raise NetworkError(
+                "Request timeout",
+                url=url,
+                error_type="timeout",
+                upstream_service="evo_auth",
+                original_exception=e,
+            )
         except httpx.HTTPStatusError as e:
             logger.error(f"EvoAuth: HTTP error for POST {endpoint}: {e.response.status_code} - {e.response.text}")
             if e.response.status_code == 401:
                 raise AuthenticationError("Invalid or expired token")
-            raise NetworkError(f"HTTP error: {e.response.status_code}")
+            error_type = "upstream_5xx" if e.response.status_code >= 500 else "upstream_4xx"
+            raise NetworkError(
+                f"HTTP error: {e.response.status_code}",
+                url=url,
+                error_type=error_type,
+                upstream_service="evo_auth",
+                original_exception=e,
+            )
         except httpx.RequestError as e:
             logger.error(f"EvoAuth: Network error for POST {endpoint}: {e}")
-            raise NetworkError(f"Network error: {e}")
+            raise NetworkError(
+                f"Network error: {e}",
+                url=url,
+                error_type="connection_refused",
+                upstream_service="evo_auth",
+                original_exception=e,
+            )
         except Exception as e:
             logger.error(f"EvoAuth: Unexpected error for POST {endpoint}: {e}")
             return None

@@ -55,6 +55,7 @@ router = APIRouter(
     }
 )
 async def get_client_usage_summary(
+    request: Request,
     current_user: dict = Depends(get_current_user),
     _: None = Depends(RequirePermission("ai_clients", "usage")),
     db: Session = Depends(get_db)
@@ -84,6 +85,7 @@ async def get_client_usage_summary(
     except Exception as e:
         logger.error(f"Error getting usage summary for account: {str(e)}")
         return error_response(
+            request=request,
             code=map_status_to_error_code(status.HTTP_500_INTERNAL_SERVER_ERROR),
             message=f"Error getting usage summary: {str(e)}",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR
