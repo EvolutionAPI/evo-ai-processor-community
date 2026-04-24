@@ -16,7 +16,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from fastapi import Request
 
-from src.utils.json_encoder import SafeJSONResponse
+# Match the defensive pattern used for `error_codes` below: if json_encoder
+# fails to import (circular import, syntax error during reload), the API still
+# boots — error/success responses just degrade to stock JSONResponse instead
+# of taking the whole service down.
+try:
+    from src.utils.json_encoder import SafeJSONResponse
+except ImportError:
+    SafeJSONResponse = JSONResponse
 
 # Import error codes for mapping
 try:

@@ -73,7 +73,7 @@ class PermissionService:
                 status_code=401,
                 detail={
                     "error": "Authentication required",
-                    "code": "ERR_UNAUTHORIZED",
+                    "code": "UNAUTHORIZED",
                     "message": "User context not available. Ensure EvoAuthMiddleware is configured."
                 }
             )
@@ -94,7 +94,7 @@ class PermissionService:
                 status_code=401,
                 detail={
                     "error": "Authorization token required",
-                    "code": "ERR_UNAUTHORIZED",
+                    "code": "UNAUTHORIZED",
                     "message": "Bearer token not available in user context"
                 }
             )
@@ -109,7 +109,7 @@ class PermissionService:
                 status_code=403,
                 detail={
                     "error": "Insufficient permissions",
-                    "code": "ERR_FORBIDDEN",
+                    "code": "FORBIDDEN",
                     "message": f"User does not have required permission: {permission_key}",
                     "permission": permission_key
                 }

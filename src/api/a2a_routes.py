@@ -58,7 +58,8 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, Request, status
 from sqlalchemy.orm import Session
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse  # noqa: F401 — kept for type hints
+from src.utils.json_encoder import SafeJSONResponse
 from sse_starlette.sse import EventSourceResponse
 from sqlalchemy.sql import text
 
@@ -1024,7 +1025,7 @@ async def handle_message_send(
                 logger.error(f"❌ Push notification failed: {e}")
                 # Continue execution - push notification failure shouldn't break the response
         
-        return JSONResponse(
+        return SafeJSONResponse(
             content={"jsonrpc": "2.0", "id": request_id, "result": task_response}
         )
 
@@ -1036,17 +1037,6 @@ async def handle_message_send(
             message="Agent execution failed",
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             details={
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {
-                    "code": -32603,
-                    "message": "Agent execution failed",
-                    "data": {"error": str(e)},
-                },
-            }
-        )
-        return JSONResponse(
-            content={
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {
@@ -1567,7 +1557,7 @@ async def get_conversation_history(
             },
         }
 
-        return JSONResponse(
+        return SafeJSONResponse(
             content={"jsonrpc": "2.0", "id": request_id, "result": task_response}
         )
 
@@ -1882,17 +1872,15 @@ async def handle_tasks_get(
             "kind": "task",
         }
 
-        return JSONResponse(
+        return SafeJSONResponse(
             content={"jsonrpc": "2.0", "id": request_id, "result": task_response}
         )
 
     except Exception as e:
         logger.error(f"❌ tasks/get error: {e}")
-        return JSONResponse(
-            code=map_status_to_error_code(status.HTTP_500_INTERNAL_SERVER_ERROR),
-            message="Internal error",
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            details={
+        # JSON-RPC error envelope — HTTP 200 per A2A spec; error travels in body.
+        return SafeJSONResponse(
+            content={
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {
@@ -1913,7 +1901,7 @@ async def handle_tasks_cancel(
     try:
         task_id = params.get("taskId")
         if not task_id:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -1927,7 +1915,7 @@ async def handle_tasks_cancel(
 
         # In our implementation, tasks complete immediately, so cancellation is not needed
         # Return success for A2A compliance
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -1940,7 +1928,7 @@ async def handle_tasks_cancel(
 
     except Exception as e:
         logger.error(f"❌ tasks/cancel error: {e}")
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -1968,7 +1956,7 @@ async def handle_tasks_push_notification_config_set(
         push_config = params.get("pushNotificationConfig")
 
         if not task_id:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -1981,7 +1969,7 @@ async def handle_tasks_push_notification_config_set(
             )
 
         if not push_config:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -1996,7 +1984,7 @@ async def handle_tasks_push_notification_config_set(
         # Validate URL is HTTPS
         webhook_url = push_config.get("url") or push_config.get("webhookUrl")
         if webhook_url and not webhook_url.startswith("https://"):
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -2012,7 +2000,7 @@ async def handle_tasks_push_notification_config_set(
         task_push_configs[task_id] = push_config
         logger.info(f"✅ Push notification config stored for task {task_id}")
 
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -2022,7 +2010,7 @@ async def handle_tasks_push_notification_config_set(
 
     except Exception as e:
         logger.error(f"❌ tasks/pushNotificationConfig/set error: {e}")
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -2044,7 +2032,7 @@ async def handle_tasks_push_notification_config_get(
     try:
         task_id = params.get("taskId")
         if not task_id:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -2060,7 +2048,7 @@ async def handle_tasks_push_notification_config_get(
         push_config = task_push_configs.get(task_id)
 
         if push_config:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -2071,7 +2059,7 @@ async def handle_tasks_push_notification_config_get(
                 }
             )
         else:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -2085,7 +2073,7 @@ async def handle_tasks_push_notification_config_get(
 
     except Exception as e:
         logger.error(f"❌ tasks/pushNotificationConfig/get error: {e}")
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -2109,7 +2097,7 @@ async def handle_tasks_resubscribe(
         push_config = params.get("pushNotificationConfig")
 
         if not task_id:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -2128,7 +2116,7 @@ async def handle_tasks_resubscribe(
 
         # In our implementation, tasks complete immediately
         # Return success for A2A compliance
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -2142,7 +2130,7 @@ async def handle_tasks_resubscribe(
 
     except Exception as e:
         logger.error(f"❌ tasks/resubscribe error: {e}")
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -2165,7 +2153,7 @@ async def handle_agent_authenticated_extended_card(
         # Get agent from database
         agent = await get_agent(db, agent_id)
         if not agent:
-            return JSONResponse(
+            return SafeJSONResponse(
                 content={
                     "jsonrpc": "2.0",
                     "id": request_id,
@@ -2223,13 +2211,13 @@ async def handle_agent_authenticated_extended_card(
             },
         }
 
-        return JSONResponse(
+        return SafeJSONResponse(
             content={"jsonrpc": "2.0", "id": request_id, "result": extended_card}
         )
 
     except Exception as e:
         logger.error(f"❌ agent/authenticatedExtendedCard error: {e}")
-        return JSONResponse(
+        return SafeJSONResponse(
             content={
                 "jsonrpc": "2.0",
                 "id": request_id,
