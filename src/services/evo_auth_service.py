@@ -68,8 +68,20 @@ class _UpstreamError(Exception):
         self.error_type = error_type
         self.upstream_service = upstream_service
         self.original_exception_class = (
-            type(original_exception).__name__ if original_exception is not None else None
+            self._qualified_class_name(original_exception)
+            if original_exception is not None
+            else None
         )
+
+    @staticmethod
+    def _qualified_class_name(exc: BaseException) -> str:
+        # Distinguish e.g. httpx.ReadTimeout from myapp.ReadTimeout — bare
+        # __name__ collisions across modules are common in transport stacks.
+        cls = type(exc)
+        module = cls.__module__
+        if not module or module == "builtins":
+            return cls.__name__
+        return f"{module}.{cls.__name__}"
 
 
 class NetworkError(_UpstreamError):

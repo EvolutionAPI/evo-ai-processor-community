@@ -36,6 +36,7 @@ from starlette.types import ASGIApp
 from src.services.evo_auth_service import get_auth_service, AuthenticationError, ServiceUnavailableError, NetworkError
 from src.services import agent_service
 from src.config.database import get_db
+from src.config.settings import settings
 from src.utils.http import HttpUtils
 from src.utils.logger import setup_logger
 from src.utils.response import error_response
@@ -262,8 +263,11 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                 "upstream_service": getattr(e, "upstream_service", None) or "evo_auth",
                 "upstream_url": getattr(e, "url", None),
                 "error_type": getattr(e, "error_type", None) or "unknown",
-                "error_class": getattr(e, "original_exception_class", None) or type(e).__name__,
             }
+            if settings.DEBUG:
+                details["error_class"] = (
+                    getattr(e, "original_exception_class", None) or type(e).__name__
+                )
             user_message = (
                 "Authentication service is temporarily unavailable. "
                 "Please try again in a moment."
@@ -271,14 +275,16 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
             return self._service_unavailable_response(request, user_message, details=details)
         except Exception as e:
             logger.exception(f"Unexpected error in EvoAuth middleware: {e}")
+            details = {
+                "upstream_service": "evo_auth",
+                "error_type": "unknown",
+            }
+            if settings.DEBUG:
+                details["error_class"] = type(e).__name__
             return self._service_unavailable_response(
                 request,
                 "Authentication service error",
-                details={
-                    "upstream_service": "evo_auth",
-                    "error_type": "unknown",
-                    "error_class": type(e).__name__,
-                },
+                details=details,
             )
     
     def _should_skip(self, path: str) -> bool:

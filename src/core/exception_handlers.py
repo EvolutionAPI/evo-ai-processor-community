@@ -13,6 +13,7 @@
 from fastapi import Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
+from src.config.settings import settings
 from src.core.exceptions import BaseAPIException
 from src.core.error_codes import (
     VALIDATION_ERROR,
@@ -126,11 +127,23 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
     """
     logger.exception(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
 
+    # Avoid leaking internal class names (e.g. SQLAlchemyIntegrityError, httpx.ReadTimeout)
+    # in production responses — useful in dev / staging only.
+    details = None
+    if settings.DEBUG:
+        exc_module = type(exc).__module__
+        exc_name = type(exc).__name__
+        details = {
+            "error_class": (
+                f"{exc_module}.{exc_name}" if exc_module and exc_module != "builtins" else exc_name
+            )
+        }
+
     return error_response(
         request=request,
         code=INTERNAL_ERROR,
         message="An internal error occurred while processing the request.",
-        details={"error_class": type(exc).__name__},
+        details=details,
         status_code=500,
     )
 
