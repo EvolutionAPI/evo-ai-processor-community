@@ -52,4 +52,4 @@ ENV PORT=8000 \
 # Expose port
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && python -m scripts.run_seeders && uvicorn src.main:app --host $HOST --port $PORT"] 
+CMD ["sh", "-c", "python -m alembic upgrade head && python -m scripts.run_seeders && python -m uvicorn src.main:app --host $HOST --port $PORT"] 
