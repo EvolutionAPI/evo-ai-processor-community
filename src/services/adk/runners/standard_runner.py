@@ -37,6 +37,12 @@ from sqlalchemy.orm import Session
 from typing import Optional, Dict, Any
 from src.services.session_service import create_execution_metrics
 from src.schemas.schemas import ExecutionMetricsCreate
+from src.evo_extension_points import (
+    ExecutionMetrics,
+    capability_gate,
+    runtime_context,
+    usage_reporter,
+)
 import uuid
 
 logger = setup_logger(__name__)
@@ -68,6 +74,20 @@ class StandardRunner:
             logger.info(
                 f"Starting execution of agent {agent_id} for external_id {external_id}"
             )
+
+            capability = (metadata or {}).get("capability")
+            if capability and not capability_gate.is_enabled(
+                capability, context=metadata
+            ):
+                logger.warning(
+                    f"Capability '{capability}' is disabled by external consumer"
+                    " — skipping agent execution"
+                )
+                return {"final_response": "Capability disabled", "message_history": []}
+
+            context_id = runtime_context.current_context_id(metadata)
+            if context_id:
+                logger.info(f"Runtime context id resolved: {context_id}")
 
             # Get and build agent
             root_agent, state_params = await self.utils.get_and_build_agent(agent_id)
@@ -470,6 +490,19 @@ class StandardRunner:
                     create_execution_metrics(self.db, metrics_data)
                 except Exception as e:
                     logger.error(f"Error creating execution metrics: {e}")
+
+                try:
+                    usage_reporter.report_execution(
+                        ExecutionMetrics(
+                            execution_id=adk_session_id,
+                            prompt_tokens=total_prompt_tokens,
+                            candidate_tokens=total_candidate_tokens,
+                            total_tokens=total_tokens,
+                            cost=0.0,
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error reporting execution to usage reporter: {e}")
 
             except Exception as e:
                 logger.error(f"Error processing request: {str(e)}")
