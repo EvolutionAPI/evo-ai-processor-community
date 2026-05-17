@@ -93,19 +93,23 @@ string is a minor bump.
 the callable's result without binding any state (single-scope mode).
 
 ```python
-from typing import Protocol, Callable, TypeVar
+from typing import Any, Protocol, Callable, TypeVar
 
 T = TypeVar("T")
 
 class RuntimeContext(Protocol):
-    def current_context_id(self, request) -> str | None: ...
+    def current_context_id(self, source: Any) -> str | None: ...
     def with_context(self, context_id: str, callable: Callable[[], T]) -> T: ...
 ```
 
-`request` is the framework-native request object (FastAPI / Starlette
-`Request`). The default implementation reads no headers and binds no
-state; consumers wire their own resolution from a neutral header such as
-`X-Operational-Context`.
+`source` is whatever the processor passes in at the call site — at the
+agent-execution call site it is the request `metadata` dictionary, but
+the contract accepts any object so a consumer can also be invoked with
+a FastAPI `Request`, a plain mapping or `None`. The default
+implementation reads nothing from `source` and binds no state;
+consumers wire their own resolution from a neutral signal such as the
+`X-Operational-Context` header or a `metadata["operational_context"]`
+key.
 
 Override:
 
@@ -114,8 +118,12 @@ import evo_extension_points
 from my_consumer import current_context
 
 class MyRuntimeContext:
-    def current_context_id(self, request) -> str | None:
-        return request.headers.get("X-Operational-Context")
+    def current_context_id(self, source) -> str | None:
+        if isinstance(source, dict):
+            return source.get("operational_context")
+        if hasattr(source, "headers"):
+            return source.headers.get("X-Operational-Context")
+        return None
 
     def with_context(self, context_id, callable):
         with current_context.bound(context_id):
@@ -202,8 +210,12 @@ class MyCapabilityGate:
         return my_consumer.capabilities.enabled(capability, context=context)
 
 class MyRuntimeContext:
-    def current_context_id(self, request) -> str | None:
-        return request.headers.get("X-Operational-Context")
+    def current_context_id(self, source) -> str | None:
+        if isinstance(source, dict):
+            return source.get("operational_context")
+        if hasattr(source, "headers"):
+            return source.headers.get("X-Operational-Context")
+        return None
 
     def with_context(self, context_id, callable):
         with my_consumer.current_context.bound(context_id):
