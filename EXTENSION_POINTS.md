@@ -1,6 +1,9 @@
 # Extension Points
 
-**Contract version:** `1.0.0` (SemVer)
+Each extension point below is versioned independently under SemVer; see
+the [Compatibility Promise](#compatibility-promise) and the per-EP
+`Version` lines. The document itself is not versioned — there is no
+single aggregate "contract version".
 
 This document is the public contract between `evo-ai-processor-community`
 and any external consumer that wants to plug into agent execution
@@ -10,8 +13,8 @@ Points Versioning Strategy**; the rules below are self-contained.
 
 The community release is fully usable on its own. Every extension point
 ships with a working default; a consumer can **replace** the default
-implementation of one or more of them without modifying files in `src/`,
-`migrations/` or `tests/`.
+implementation of one or more of them without modifying files in `src/`
+or `migrations/`.
 
 If you are about to change any of the three extension points below, read
 the [Compatibility Promise](#compatibility-promise) first.
@@ -40,13 +43,64 @@ Bumping one extension point does not bump the others.
 
 ---
 
+## Registration API
+
+**Version:** `1.0.0`
+
+The registration mechanism is itself part of the public contract. Every
+override goes through one function:
+
+```python
+def replace(name: str, impl: object) -> None: ...
+```
+
+**Accepted `name` values (v1.0.0):** `"capability_gate"`,
+`"runtime_context"`, `"usage_reporter"`. Adding a new accepted name is
+a minor bump; removing or renaming an accepted name is a major bump.
+
+**`impl` contract:** any object whose attributes satisfy the
+`typing.Protocol` declared for that extension point. The implementation
+is structurally type-checked at registration time; passing an object
+that does not satisfy the Protocol raises `TypeError` synchronously.
+
+**Idempotency / replacement order:** `replace` is last-write-wins. Each
+call replaces the previously registered implementation atomically. The
+returned value is `None`; callers that need the previous implementation
+should capture it before calling `replace`.
+
+**When it may be called:** any time before the first call site that
+exercises the extension point. The recommended placement is application
+boot (a single `install_extension_points()` function called from the
+FastAPI lifespan, before the first request is served). Calling
+`replace` after the EP has been exercised is allowed and atomic, but
+in-flight calls observe the previous implementation.
+
+**Thread / async safety:** `replace` is safe to call from any thread
+and from inside an async coroutine. Reads of the active implementation
+are lock-free.
+
+**Failure modes:**
+- Unknown `name` → `KeyError`.
+- `impl` does not satisfy the Protocol → `TypeError`.
+- `impl` is `None` → `TypeError` (use a distinct reset helper, not
+  `replace`).
+
+A complementary helper, `evo_extension_points.reset(name: str) -> None`,
+restores the community default for a given extension point. Calling
+`reset` with an unknown name raises `KeyError`.
+
+---
+
 ## Extension points
 
 All three are exposed under the `evo_extension_points` package,
 implemented by `src/evo_extension_points/` (shipped in a complementary
 story). Contracts are declared as `typing.Protocol` so that consumers
-get static type checking without inheritance. The aggregate contract
-version is exposed at `evo_extension_points.EXTENSION_POINTS_VERSION`.
+get static type checking without inheritance. Each extension point
+exposes its own version as `<extension_point>.VERSION` (e.g.
+`evo_extension_points.capability_gate.VERSION == "1.0.0"`); there is
+no aggregate `EXTENSION_POINTS_VERSION` constant — version each EP
+independently.
 
 ### 1. `capability_gate`
 
@@ -99,7 +153,7 @@ T = TypeVar("T")
 
 class RuntimeContext(Protocol):
     def current_context_id(self, request) -> str | None: ...
-    def with_context(self, context_id: str, callable: Callable[[], T]) -> T: ...
+    def with_context(self, context_id: str, fn: Callable[[], T]) -> T: ...
 ```
 
 `request` is the framework-native request object (FastAPI / Starlette
@@ -117,9 +171,9 @@ class MyRuntimeContext:
     def current_context_id(self, request) -> str | None:
         return request.headers.get("X-Operational-Context")
 
-    def with_context(self, context_id, callable):
+    def with_context(self, context_id, fn):
         with current_context.bound(context_id):
-            return callable()
+            return fn()
 
 evo_extension_points.replace("runtime_context", MyRuntimeContext())
 ```
@@ -132,10 +186,12 @@ bump.
 ### 3. `usage_reporter`
 
 **Version:** `1.0.0`
-**Default:** no-op; the community release already persists
-`evo_agent_processor_execution_metrics` locally and calls the reporter
-once with the same data, allowing external observability to mirror what
-is already written in the local table.
+**Default:** no-op. The community release always persists each
+execution into `evo_agent_processor_execution_metrics` locally and
+then calls `report_execution` once with the same data, regardless of
+which implementation is installed; the default implementation discards
+the call. An external consumer registers a non-default implementation
+to mirror the local table into external observability.
 
 ```python
 from dataclasses import dataclass
@@ -158,10 +214,20 @@ by the processor; consumers correlate it back to their own systems.
 `cost` is the monetary value (`float`) already computed by the processor
 in its base currency.
 
-The default implementation is a no-op. The processor invokes
-`report_execution` synchronously after each execution finishes; a
-consumer that needs asynchronous fan-out is expected to enqueue inside
-its own override.
+**Call site and threading model:** the processor invokes
+`report_execution` inline at the end of the agent execution
+coroutine, on the FastAPI event loop. The override therefore runs on
+the event loop; a blocking implementation will block other requests
+served by the same worker. Consumers MUST keep the call non-blocking:
+either return immediately and enqueue the work elsewhere
+(`asyncio.create_task`, a background queue, a sidecar), or offload
+synchronous work via `asyncio.to_thread`. The Protocol is declared
+synchronous at v1.0.0; converting it to `async def` is a major bump.
+
+Exceptions raised by `report_execution` are caught and logged at
+`WARNING` by the processor and do not abort the agent execution or
+the parent HTTP response — the local persistence into
+`evo_agent_processor_execution_metrics` is already committed by then.
 
 Override:
 
@@ -205,9 +271,9 @@ class MyRuntimeContext:
     def current_context_id(self, request) -> str | None:
         return request.headers.get("X-Operational-Context")
 
-    def with_context(self, context_id, callable):
+    def with_context(self, context_id, fn):
         with my_consumer.current_context.bound(context_id):
-            return callable()
+            return fn()
 
 class MyUsageReporter:
     def report_execution(self, metrics: ExecutionMetrics) -> None:
@@ -224,9 +290,12 @@ def install_extension_points() -> None:
 ```
 
 A consumer is expected to declare the community version range it
-supports in its own package metadata (`pyproject.toml`). A CI workflow
-(`extension-points-contract`) runs a neutral consumer stub against
-every community PR, failing the build on a contract break.
+supports in its own package metadata (`pyproject.toml`). A future CI
+workflow (`extension-points-contract`) will run a neutral consumer
+stub against every community PR and fail the build on a contract
+break; until that workflow lands, contract regressions are caught by
+manual review of changes to this file and the
+`src/evo_extension_points/` implementation.
 
 ---
 
@@ -243,5 +312,11 @@ every community PR, failing the build on a contract break.
 
 ## Versioning history
 
-- `1.0.0` — Initial contract: `CapabilityGate`, `RuntimeContext`,
-  `UsageReporter`.
+Each line below tracks one independently versioned surface. The
+document itself is unversioned.
+
+- Registration API `1.0.0` — Initial: `replace(name, impl)` +
+  `reset(name)`.
+- `capability_gate` `1.0.0` — Initial contract.
+- `runtime_context` `1.0.0` — Initial contract.
+- `usage_reporter` `1.0.0` — Initial contract.
