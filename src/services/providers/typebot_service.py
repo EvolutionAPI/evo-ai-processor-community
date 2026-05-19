@@ -30,6 +30,7 @@ class TypebotService:
         self.typebot = config.get("typebot")
         self.api_version = config.get("apiVersion", "latest")
         self.integration_config = config
+        self.is_only_registering = bool(config.get("isOnlyRegistering")) if isinstance(config, dict) else False
         self._cache_ns = f"{self.url}:{self.typebot}"
         
         if not self.url:
@@ -61,13 +62,11 @@ class TypebotService:
             "ownerJid": context.get("ownerJid", "") if context else "",
         }
 
-        is_only_registering = bool(config.get("isOnlyRegistering")) if isinstance(config := getattr(self, "integration_config", None), dict) else False
-
         if self.api_version == "latest":
             endpoint = f"{self.url}/api/v1/typebots/{self.typebot}/startChat"
             payload = {
                 "resultId": session_id,
-                "isOnlyRegistering": is_only_registering,
+                "isOnlyRegistering": self.is_only_registering,
                 "prefilledVariables": prefilled,
                 "textBubbleContentFormat": "richText",
             }
