@@ -9,6 +9,7 @@ from google.genai.types import Content, Part
 from sqlalchemy.orm import Session
 from typing import AsyncGenerator, Dict, Any
 import logging
+import json
 
 from src.services.providers import (
     FlowiseService,
@@ -130,18 +131,28 @@ class ExternalAgent(BaseAgent):
 
             # Send message to provider
             try:
-                response_text = await self.provider_service.send_message(
+                provider_response = await self.provider_service.send_message(
                     message=user_message,
                     session_id=session_id,
                     context=provider_context,
                 )
+
+                response_text = provider_response
+                structured = None
+                if isinstance(provider_response, dict):
+                    response_text = provider_response.get("text", "")
+                    structured = provider_response.get("structured")
+
+                parts = [Part(text=str(response_text) if response_text is not None else "")]
+                if structured is not None:
+                    parts.append(Part(text=f"EVO_STRUCTURED:{json.dumps(structured, ensure_ascii=False)}"))
 
                 # Yield response event
                 yield Event(
                     author=self.name,
                     content=Content(
                         role="agent",
-                        parts=[Part(text=response_text)],
+                        parts=parts,
                     ),
                 )
 
