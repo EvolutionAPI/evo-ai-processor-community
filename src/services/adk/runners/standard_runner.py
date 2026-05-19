@@ -484,14 +484,17 @@ class StandardRunner:
                 )
 
                 try:
-                    # Handle both Pydantic v2 (model_dump) and older versions
-                    if hasattr(root_agent.model, "model_dump"):
-                        model_dict = root_agent.model.model_dump()
-                    elif hasattr(root_agent.model, "dict"):
-                        model_dict = root_agent.model.dict()
+                    if not hasattr(root_agent, "model"):
+                        model_str = "external"
                     else:
-                        model_dict = root_agent.model.__dict__
-                    model_str = model_dict.get("model", str(root_agent.model))
+                        # Handle both Pydantic v2 (model_dump) and older versions
+                        if hasattr(root_agent.model, "model_dump"):
+                            model_dict = root_agent.model.model_dump()
+                        elif hasattr(root_agent.model, "dict"):
+                            model_dict = root_agent.model.dict()
+                        else:
+                            model_dict = root_agent.model.__dict__
+                        model_str = model_dict.get("model", str(root_agent.model))
                     metrics_data = ExecutionMetricsCreate(
                         agent_id=uuid.UUID(agent_id),
                         session_id=adk_session_id,

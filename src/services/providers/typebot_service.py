@@ -3,7 +3,7 @@ Typebot provider service for external agent integration.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 class TypebotService:
     """Service for integrating with Typebot."""
+
+    _session_cache: Dict[str, Dict[str, Optional[str]]] = {}
 
     def __init__(self, config: Dict[str, Any]):
         """
@@ -25,6 +27,8 @@ class TypebotService:
         self.url = config.get("url")
         self.typebot = config.get("typebot")
         self.api_version = config.get("apiVersion", "latest")
+        self.integration_config = config
+        self._cache_ns = f"{self.url}:{self.typebot}"
         
         if not self.url:
             raise ValueError("Typebot url is required")
@@ -35,7 +39,7 @@ class TypebotService:
         self,
         session_id: str,
         context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[str]:
+    ) -> Optional[Dict[str, Optional[str]]]:
         """
         Start a new Typebot session.
 
@@ -46,31 +50,31 @@ class TypebotService:
         Returns:
             Typebot session ID or None
         """
+        prefilled = {
+            "remoteJid": context.get("remoteJid", "") if context else "",
+            "pushName": context.get("pushName", "") if context else "",
+            "instanceName": context.get("instanceName", "") if context else "",
+            "serverUrl": context.get("serverUrl", "") if context else "",
+            "apiKey": context.get("apiKey", "") if context else "",
+            "ownerJid": context.get("ownerJid", "") if context else "",
+        }
+
+        is_only_registering = bool(config.get("isOnlyRegistering")) if isinstance(config := getattr(self, "integration_config", None), dict) else False
+
         if self.api_version == "latest":
             endpoint = f"{self.url}/api/v1/typebots/{self.typebot}/startChat"
             payload = {
-                "prefilledVariables": {
-                    "remoteJid": context.get("remoteJid", "") if context else "",
-                    "pushName": context.get("pushName", "") if context else "",
-                    "instanceName": context.get("instanceName", "") if context else "",
-                    "serverUrl": context.get("serverUrl", "") if context else "",
-                    "apiKey": context.get("apiKey", "") if context else "",
-                    "ownerJid": context.get("ownerJid", "") if context else "",
-                },
+                "resultId": session_id,
+                "isOnlyRegistering": is_only_registering,
+                "prefilledVariables": prefilled,
+                "textBubbleContentFormat": "richText",
             }
         else:
             endpoint = f"{self.url}/api/v1/sendMessage"
             payload = {
                 "startParams": {
                     "publicId": self.typebot,
-                    "prefilledVariables": {
-                        "remoteJid": context.get("remoteJid", "") if context else "",
-                        "pushName": context.get("pushName", "") if context else "",
-                        "instanceName": context.get("instanceName", "") if context else "",
-                        "serverUrl": context.get("serverUrl", "") if context else "",
-                        "apiKey": context.get("apiKey", "") if context else "",
-                        "ownerJid": context.get("ownerJid", "") if context else "",
-                    },
+                    "prefilledVariables": prefilled,
                 },
             }
 
@@ -79,7 +83,27 @@ class TypebotService:
                 response = await client.post(endpoint, json=payload)
                 response.raise_for_status()
                 response_data = response.json()
-                return response_data.get("sessionId")
+                typebot_session_id = response_data.get("sessionId")
+                if not typebot_session_id:
+                    logger.error("Typebot startChat response missing sessionId")
+                    return None
+
+                reply_id = None
+                input_obj = response_data.get("input") if isinstance(response_data, dict) else None
+                if isinstance(input_obj, dict):
+                    reply_id = input_obj.get("id")
+
+                initial_messages = response_data.get("messages", [])
+                initial_text = self._format_messages(initial_messages) if initial_messages else ""
+                input_block = self._format_input_block(input_obj)
+                if input_block:
+                    initial_text = (initial_text.strip() + "\n\n" + input_block).strip() if initial_text else input_block
+
+                return {
+                    "session_id": typebot_session_id,
+                    "reply_id": reply_id,
+                    "initial_text": initial_text,
+                }
         except Exception as e:
             logger.error(f"Error starting Typebot session: {e}")
             return None
@@ -95,25 +119,87 @@ class TypebotService:
 
         Args:
             message: User message
-            session_id: Typebot session ID
+            session_id: ADK session ID (used as correlation, not Typebot session)
             context: Optional context variables
 
         Returns:
             Formatted response text from Typebot messages
         """
-        if not session_id:
-            # Start new session
-            session_id = await self.start_session("new", context)
-            if not session_id:
+        cache_key = f"{self._cache_ns}:{session_id or 'default'}"
+        session_info = TypebotService._session_cache.get(cache_key)
+        logger.info(f"Typebot send_message: session_id={session_id!r} cache_hit={session_info is not None}")
+
+        if session_info:
+            try:
+                response_text, next_reply_id = await self._continue_chat(
+                    session_info["session_id"],
+                    message,
+                    session_info.get("reply_id"),
+                )
+                session_info["reply_id"] = next_reply_id
+                return response_text
+            except Exception as e:
+                if "404" in str(e):
+                    logger.info("Typebot session expired, starting new one")
+                    TypebotService._session_cache.pop(cache_key, None)
+                    session_info = None
+                else:
+                    raise
+
+        if not session_info:
+            session_info = await self.start_session(session_id or cache_key, context)
+            if not session_info:
                 raise Exception("Failed to start Typebot session")
+            TypebotService._session_cache[cache_key] = session_info
 
+        initial_text = session_info.pop("initial_text", "") or ""
+
+        if initial_text and session_info.get("reply_id"):
+            logger.debug("Typebot new session: returning greeting, waiting for user input")
+            return initial_text
+
+        response_text, next_reply_id = await self._continue_chat(
+            session_info["session_id"],
+            message,
+            session_info.get("reply_id"),
+        )
+        session_info["reply_id"] = next_reply_id
+
+        if initial_text:
+            combined = (initial_text.strip() + "\n\n" + response_text.strip()).strip()
+            return combined
+        return response_text
+
+    async def _continue_chat(
+        self,
+        typebot_session_id: str,
+        message: str,
+        reply_id: Optional[str] = None,
+    ) -> Tuple[str, Optional[str]]:
+        """Continue an existing Typebot chat session."""
         # Extract actual session ID (Typebot format: {id}-{sessionId})
-        actual_session_id = session_id.split("-")[-1] if "-" in session_id else session_id
+        actual_session_id = (
+            typebot_session_id.split("-")[-1]
+            if "-" in typebot_session_id
+            else typebot_session_id
+        )
 
-        # Continue chat
         if self.api_version == "latest":
+            metadata: Dict[str, Any] = {}
+            if reply_id:
+                metadata["replyId"] = reply_id
+
+            message_payload = {
+                "type": "text",
+                "text": message,
+                "metadata": metadata,
+                "attachedFileUrls": [],
+            }
             endpoint = f"{self.url}/api/v1/sessions/{actual_session_id}/continueChat"
-            payload = {"message": message}
+            payload = {
+                "message": message_payload,
+                "textBubbleContentFormat": "richText",
+            }
         else:
             endpoint = f"{self.url}/api/v1/sendMessage"
             payload = {
@@ -126,16 +212,56 @@ class TypebotService:
                 response = await client.post(endpoint, json=payload)
                 response.raise_for_status()
                 response_data = response.json()
-                
+
                 # Process messages array and format text
                 messages = response_data.get("messages", [])
-                return self._format_messages(messages)
+                next_input = response_data.get("input") if isinstance(response_data, dict) else None
+                next_reply_id = next_input.get("id") if isinstance(next_input, dict) else None
+                formatted = self._format_messages(messages)
+                input_block = self._format_input_block(next_input)
+                if input_block:
+                    formatted = (formatted.strip() + "\n\n" + input_block).strip() if formatted else input_block
+                return formatted, next_reply_id
         except httpx.HTTPStatusError as e:
             logger.error(f"Typebot API error: {e.response.status_code} - {e.response.text}")
             raise Exception(f"Typebot API error: {e.response.status_code}")
         except Exception as e:
             logger.error(f"Error calling Typebot: {e}")
             raise
+
+    def _format_input_block(self, input_obj: Optional[Dict[str, Any]]) -> str:
+        """
+        Format a Typebot input block (choice, pictureChoice) as a numbered list.
+
+        Returns empty string for free-text inputs (text, number, email, etc.)
+        """
+        if not isinstance(input_obj, dict):
+            return ""
+
+        input_type = input_obj.get("type", "")
+
+        if input_type in ("choice", "multipleChoiceInput"):
+            items = input_obj.get("items", [])
+            lines = []
+            for i, item in enumerate(items, 1):
+                content = (item.get("content") or "").strip()
+                if content:
+                    lines.append(f"{i}. {content}")
+            return "\n".join(lines)
+
+        if input_type == "pictureChoice":
+            items = input_obj.get("items", [])
+            lines = []
+            for i, item in enumerate(items, 1):
+                title = (item.get("title") or "").strip()
+                pic_src = (item.get("pictureSrc") or "").strip()
+                if title and pic_src:
+                    lines.append(f"{i}. {title}\n   {pic_src}")
+                elif title:
+                    lines.append(f"{i}. {title}")
+            return "\n".join(lines)
+
+        return ""
 
     def _format_messages(self, messages: List[Dict[str, Any]]) -> str:
         """

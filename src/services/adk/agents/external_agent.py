@@ -33,6 +33,7 @@ class ExternalAgent(BaseAgent):
     provider: str
     integration_config: Dict[str, Any]
     db: Session
+    provider_service: Any = None
 
     def __init__(
         self,
@@ -171,12 +172,14 @@ class ExternalAgent(BaseAgent):
 
     def _get_session_id(self, ctx: InvocationContext) -> str:
         """Get or generate session ID from context."""
+        if ctx.session and ctx.session.id:
+            return ctx.session.id
+
         if ctx.session and ctx.session.state:
             session_id = ctx.session.state.get("session_id")
             if session_id:
                 return session_id
-        
-        # Generate new session ID
+
         import uuid
         return str(uuid.uuid4())
 
