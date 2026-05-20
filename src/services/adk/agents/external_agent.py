@@ -9,6 +9,7 @@ from google.genai.types import Content, Part
 from sqlalchemy.orm import Session
 from typing import AsyncGenerator, Dict, Any
 import logging
+import json
 
 from src.services.providers import (
     FlowiseService,
@@ -33,6 +34,7 @@ class ExternalAgent(BaseAgent):
     provider: str
     integration_config: Dict[str, Any]
     db: Session
+    provider_service: Any = None
 
     def __init__(
         self,
@@ -129,18 +131,28 @@ class ExternalAgent(BaseAgent):
 
             # Send message to provider
             try:
-                response_text = await self.provider_service.send_message(
+                provider_response = await self.provider_service.send_message(
                     message=user_message,
                     session_id=session_id,
                     context=provider_context,
                 )
+
+                response_text = provider_response
+                structured = None
+                if isinstance(provider_response, dict):
+                    response_text = provider_response.get("text", "")
+                    structured = provider_response.get("structured")
+
+                parts = [Part(text=str(response_text) if response_text is not None else "")]
+                if structured is not None:
+                    parts.append(Part(text=f"EVO_STRUCTURED:{json.dumps(structured, ensure_ascii=False)}"))
 
                 # Yield response event
                 yield Event(
                     author=self.name,
                     content=Content(
                         role="agent",
-                        parts=[Part(text=response_text)],
+                        parts=parts,
                     ),
                 )
 
@@ -171,12 +183,14 @@ class ExternalAgent(BaseAgent):
 
     def _get_session_id(self, ctx: InvocationContext) -> str:
         """Get or generate session ID from context."""
+        if ctx.session and ctx.session.id:
+            return ctx.session.id
+
         if ctx.session and ctx.session.state:
             session_id = ctx.session.state.get("session_id")
             if session_id:
                 return session_id
-        
-        # Generate new session ID
+
         import uuid
         return str(uuid.uuid4())
 
