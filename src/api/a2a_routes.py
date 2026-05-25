@@ -355,6 +355,7 @@ def create_task_response(
     task_id: str,
     context_id: str,
     final_response: str,
+    artifacts: Optional[List[Dict[str, Any]]] = None,
     conversation_history: Optional[List[Dict[str, Any]]] = None,
     current_user_message: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -365,7 +366,7 @@ def create_task_response(
     )
 
     # Create main response artifact (only the agent's response)
-    artifacts = [
+    artifacts = artifacts or [
         {
             "artifactId": str(uuid.uuid4()),
             "parts": [{"type": "text", "text": final_response}],
@@ -523,6 +524,8 @@ async def extract_conversation_history(
                     if isinstance(part, dict) and part.get("text"):
                         role = "user" if event_dict.get("author") == "user" else "agent"
                         text_content = part["text"]
+                        if isinstance(text_content, str) and text_content.startswith(STRUCTURED_PART_PREFIX):
+                            continue
 
                         # Clean the content to remove JSON artifacts
                         cleaned_content = clean_message_content(text_content, role)
@@ -781,6 +784,75 @@ def extract_metadata_from_request(params: Dict[str, Any]) -> Dict[str, Any]:
     return metadata
 
 
+STRUCTURED_PART_PREFIX = "EVO_STRUCTURED:"
+
+
+def extract_structured_from_message_history(
+    message_history: Optional[List[Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    if not message_history:
+        return None
+
+    for event in reversed(message_history):
+        content = event.get("content") if isinstance(event, dict) else None
+        parts = content.get("parts") if isinstance(content, dict) else None
+        if not isinstance(parts, list):
+            continue
+
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+
+            text = part.get("text")
+            if not isinstance(text, str) or not text.startswith(STRUCTURED_PART_PREFIX):
+                continue
+
+            raw = text[len(STRUCTURED_PART_PREFIX):].strip()
+            try:
+                decoded = json.loads(raw)
+                return decoded if isinstance(decoded, dict) else None
+            except Exception:
+                continue
+
+    return None
+
+
+def build_a2a_artifacts(
+    final_response: str,
+    structured: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    artifacts: List[Dict[str, Any]] = [
+        {
+            "artifactId": str(uuid.uuid4()),
+            "parts": [{"type": "text", "text": final_response}],
+        }
+    ]
+
+    if not structured:
+        return artifacts
+
+    input_obj = structured.get("input") if isinstance(structured, dict) else None
+    if not isinstance(input_obj, dict):
+        return artifacts
+
+    if input_obj.get("type") == "select" and isinstance(input_obj.get("items"), list):
+        artifacts.append(
+            {
+                "artifactId": str(uuid.uuid4()),
+                "parts": [
+                    {
+                        "type": "select",
+                        "items": input_obj.get("items", []),
+                        "isMultiple": bool(input_obj.get("isMultiple")),
+                        "sourceType": input_obj.get("sourceType"),
+                    }
+                ],
+            }
+        )
+
+    return artifacts
+
+
 async def handle_message_send(
     agent_id: uuid.UUID, params: Dict[str, Any], request_id: str, request: Request, db: Session
 ) -> JSONResponse:
@@ -1002,11 +1074,15 @@ async def handle_message_send(
             "timestamp": None,  # Could add current timestamp
         }
 
+        structured = extract_structured_from_message_history(result.get("message_history"))
+        artifacts = build_a2a_artifacts(final_response, structured)
+
         # Create A2A compliant response with history
         task_response = create_task_response(
             task_id,
             context_id,
             final_response,
+            artifacts,
             combined_history if combined_history else None,
             current_user_message,
         )
