@@ -141,8 +141,16 @@ POSTGRES_CONNECTION_STRING = os.getenv(
     "POSTGRES_CONNECTION_STRING", "postgresql://postgres:root@localhost:5432/evo_ai"
 )
 
-# Create database tables
-Base.metadata.create_all(bind=engine, checkfirst=True)
+# Create database tables — exclude tables owned by other services (auth/CRM)
+# The `users` table is owned by evo-auth-service. Creating it here as a stub
+# (id integer) makes auth's InitSchema skip the real creation via if_not_exists,
+# permanently breaking authentication. See: incident multimport/2026-05-27.
+_owned_by_other_services = {"users"}
+_tables_to_create = [
+    table for name, table in Base.metadata.tables.items()
+    if name not in _owned_by_other_services
+]
+Base.metadata.create_all(bind=engine, tables=_tables_to_create, checkfirst=True)
 
 API_PREFIX = "/api/v1"
 
