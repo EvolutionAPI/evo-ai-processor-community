@@ -5,6 +5,22 @@ All notable changes to this microservice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.0-rc5] - 2026-05-27
+
+Hardening release — eliminates the processor's contribution to the fresh-install authentication failure. Also folds in the organization rename from `EvolutionAPI` to `evolution-foundation` across documentation.
+
+### Fixed
+
+- **Fresh-install boot — stop creating stub `users` table on `metadata.create_all`** — at startup the processor's SQLAlchemy `Base.metadata.create_all()` was emitting a `users(id integer)` stub that races with the auth service's authoritative `users` schema on a clean database. On a fresh install the processor occasionally won the race, leaving the auth service unable to insert/authenticate against its own table. Cross-service tables are now excluded from `create_all`; the processor only materializes tables it owns.
+
+### Changed
+
+- **Docs (org)** — GitHub URLs and references updated from `EvolutionAPI` to `evolution-foundation` to match the foundation rename. No code impact.
+
+### Notes for upgrade
+
+- **Fresh installs**: the `users` table stub conflict with `evo-auth-service-community` is resolved. No manual database cleanup is required on greenfield deployments; upgrading existing databases is a no-op (the auth service already owns the authoritative schema).
+
 ## [v1.0.0-rc4] - 2026-05-25
 
 Point release — adds Typebot interactive button rendering. Other subsystems unchanged.
@@ -103,3 +119,10 @@ Integration release — adds native tools for the LLM agent (Knowledge Nexus sea
 ---
 
 Older versions and future releases will be listed here.
+
+[v1.0.0-rc5]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc4...v1.0.0-rc5
+[v1.0.0-rc4]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc3...v1.0.0-rc4
+[v1.0.0-rc3]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc2...v1.0.0-rc3
+[v1.0.0-rc2]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc1...v1.0.0-rc2
+[v1.0.0-rc1]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/0.1.0...v1.0.0-rc1
+[0.1.0]: https://github.com/evolution-foundation/evo-ai-processor-community/releases/tag/0.1.0
