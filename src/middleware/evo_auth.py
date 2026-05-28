@@ -271,7 +271,7 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
             return True
         
         # Check path prefixes
-        skip_prefixes = ["/docs", "/redoc", "/openapi", "/static/"]
+        skip_prefixes = ["/docs", "/redoc", "/openapi", "/static/", "/api/v1/chat/ws/", "/api/v1/chat/ws-live/"]
         return any(path.startswith(prefix) for prefix in skip_prefixes)
     
     def _extract_token(self, request: Request) -> tuple:

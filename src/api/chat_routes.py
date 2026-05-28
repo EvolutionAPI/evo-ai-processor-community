@@ -86,7 +86,7 @@ async def get_jwt_token_ws(token: str, skip_validation: bool = False) -> Optiona
             from src.services.evo_auth_service import get_auth_service
             auth_service = get_auth_service()
             # Try as bearer token first
-            auth_response = (await auth_service.validate_token(token, "bearer")).data
+            auth_response = await auth_service.validate_token(token, "bearer")
             if auth_response and auth_response.user:
                 # Return user context similar to what middleware does
                 user = auth_response.user.dict() if hasattr(auth_response.user, 'dict') else auth_response.user
