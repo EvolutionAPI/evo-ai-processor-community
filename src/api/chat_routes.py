@@ -646,6 +646,7 @@ async def chat(
             db,
             session_id=session_id,
             files=payload.files,
+            request=request,
         )
 
         return success_response(

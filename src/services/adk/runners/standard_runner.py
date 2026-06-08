@@ -69,6 +69,7 @@ class StandardRunner:
         files: Optional[list] = None,
         metadata: Optional[Dict[str, Any]] = None,
         user_id: Optional[str] = None,
+        request: Any = None,
     ) -> Dict[str, Any]:
         """Execute a non-streaming agent request."""
         try:
@@ -97,7 +98,7 @@ class StandardRunner:
             # Extension point: runtime context resolution. Default returns
             # None; consumer overrides return an operational context id that
             # is logged here and (in a follow-up) propagated into metrics.
-            context_id = runtime_context.current_context_id(metadata)
+            context_id = runtime_context.current_context_id(request if request is not None else metadata)
             if context_id:
                 logger.info(
                     f"runtime_context resolved id={context_id!r}"
