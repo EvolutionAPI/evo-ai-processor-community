@@ -142,9 +142,10 @@ string is a minor bump.
 
 ### 2. `runtime_context`
 
-**Version:** `1.0.0`
+**Version:** `1.1.0`
 **Default:** `current_context_id` returns `None`; `with_context` yields
-the callable's result without binding any state (single-scope mode).
+the callable's result without binding any state (single-scope mode);
+`bind_context` returns a no-op async context manager.
 
 ```python
 from typing import Protocol, Callable, TypeVar
@@ -154,6 +155,10 @@ T = TypeVar("T")
 class RuntimeContext(Protocol):
     def current_context_id(self, request) -> str | None: ...
     def with_context(self, context_id: str, fn: Callable[[], T]) -> T: ...
+    # Optional (added in 1.1.0). If present, callers MAY use it via
+    # the public `bind_context(...)` shim to scope per-request binding
+    # across awaits.
+    # def bind_context(self, context_id: str) -> AsyncContextManager[None]: ...
 ```
 
 `request` is the framework-native request object (FastAPI / Starlette
@@ -182,6 +187,14 @@ evo_extension_points.replace("runtime_context", MyRuntimeContext())
 `with_context`, or changing the return type of `current_context_id`
 from `str | None`, is a major bump. Adding sibling helpers is a minor
 bump.
+
+**Why `bind_context` is async-only.** Per-request tenant binding has to
+survive every `await` between the FastAPI handler and the next DB
+transaction the SQLAlchemy engine opens. `with_context(fn)` is
+synchronous by contract — if `fn` returns a coroutine, the consumer
+would reset its binding before the caller awaits it. The dedicated
+async context manager keeps the binding alive across awaits and
+guarantees deterministic reset on exit (including on exception).
 
 ### 3. `usage_reporter`
 
@@ -319,4 +332,5 @@ document itself is unversioned.
   `reset(name)`.
 - `capability_gate` `1.0.0` — Initial contract.
 - `runtime_context` `1.0.0` — Initial contract.
+- `runtime_context` `1.1.0` — Adds optional `bind_context(context_id) -> AsyncContextManager[None]` sibling for scoping per-request binding across awaits.
 - `usage_reporter` `1.0.0` — Initial contract.
