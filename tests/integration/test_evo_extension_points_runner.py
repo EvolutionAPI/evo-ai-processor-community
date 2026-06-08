@@ -129,7 +129,7 @@ class TestUsageReporterOverride:
 
 class TestBindContextWrap:
     """Mirror the ``async with runtime_context.bind_context(...)`` wrap
-    added in ``StandardRunner.run_agent`` for EVO-1626.
+    added to ``StandardRunner.run_agent``.
 
     These tests do not execute the full runner; they reproduce the wrap
     shape so a future change to it is caught alongside the EP contract.

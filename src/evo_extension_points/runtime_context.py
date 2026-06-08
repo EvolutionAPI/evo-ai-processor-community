@@ -9,7 +9,7 @@ community having to know what binding means.
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Protocol, TypeVar, runtime_checkable
 
 from . import registry
@@ -53,7 +53,7 @@ def with_context(context_id: str, fn: Callable[[], T]) -> T:
     return impl.with_context(context_id, fn)
 
 
-def bind_context(context_id: str):
+def bind_context(context_id: str) -> AbstractAsyncContextManager[None]:
     """Return an async context manager that binds ``context_id`` for the
     enclosed scope.
 
