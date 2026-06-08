@@ -169,6 +169,19 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
         try:
             current_labels_raw = await client.get(endpoint=endpoint)
             current_labels = _normalize_labels(current_labels_raw)
+            # The CRM /labels endpoint replaces (not appends) the whole set on POST,
+            # so this read is what protects existing labels. A 204/empty body or an
+            # intermittent auth failure makes the read look like "no labels", and a
+            # subsequent add would then POST only the requested labels — WIPING every
+            # existing label, including the `atendimento_ia` gate that keeps the bot
+            # active. Detect a read that returned nothing usable and refuse to do a
+            # destructive add rather than silently clobbering the conversation.
+            read_is_empty = not current_labels
+            read_is_unreliable = (
+                isinstance(current_labels_raw, dict)
+                and "status_code" in current_labels_raw
+                and current_labels_raw.get("status_code") != 200
+            )
         except Exception as api_error:
             logger.error(
                 f"Failed to load labels for conversation {effective_conversation_id}: {api_error}"
@@ -202,6 +215,27 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
         existing_set = {label.lower(): label for label in current_labels}
 
         if normalized_action == "add":
+            # Defense-in-depth: refuse a destructive add. If the read came back empty
+            # *because it was unreliable* (non-200/204 with no body), POSTing only the
+            # requested labels would replace and wipe every existing label, including
+            # the `atendimento_ia` gate. In that case abort instead of clobbering.
+            if read_is_empty and read_is_unreliable:
+                logger.error(
+                    "manage_conversation_labels: refusing to add labels to "
+                    f"{effective_conversation_id} — the labels read was unreliable "
+                    f"(raw={current_labels_raw}); a replace would wipe existing labels."
+                )
+                return {
+                    "status": "error",
+                    "message": (
+                        "Could not read the conversation's current labels reliably, "
+                        "so the add was skipped to avoid removing existing labels. "
+                        "Please retry."
+                    ),
+                    "conversation_id": effective_conversation_id,
+                    "action": "add",
+                }
+
             merged = list(current_labels)
             added: List[str] = []
             for label in requested:
