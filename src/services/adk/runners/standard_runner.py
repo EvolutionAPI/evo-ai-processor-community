@@ -106,10 +106,9 @@ class StandardRunner:
                     f" for agent={agent_id}"
                 )
 
-            # EVO-1626: bind tenant for the rest of the request. Community
-            # default is a no-op async CM; enterprise consumer scopes
-            # app.current_tenant_id across awaits and emits set_config on
-            # each transaction begin.
+            # Bind the resolved operational context for the rest of the
+            # request. Community default is a no-op async CM; a registered
+            # consumer may keep the context bound across awaits.
             async with (runtime_context.bind_context(context_id)
                                     if context_id else nullcontext()):
                 # Get and build agent

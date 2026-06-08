@@ -3,7 +3,7 @@
 Community default: ``current_context_id`` returns ``None``;
 ``with_context`` yields the callable's result without binding any state
 (single-scope mode); ``bind_context`` returns a no-op async context
-manager so consumers can wire per-request tenant binding without the
+manager so consumers can wire per-request context binding without the
 community having to know what binding means.
 """
 
@@ -58,7 +58,7 @@ def bind_context(context_id: str):
     enclosed scope.
 
     Optional EP method (added in 1.1.0). The community default is a no-op
-    async CM; enterprise consumers may expose a ``bind_context(context_id)``
+    async CM; consumers may expose a ``bind_context(context_id)``
     method on their impl to participate. Callers must use ``async with``.
     """
     impl = registry.impl_for("runtime_context") or _DEFAULT

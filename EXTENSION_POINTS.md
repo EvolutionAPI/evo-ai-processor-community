@@ -188,13 +188,13 @@ evo_extension_points.replace("runtime_context", MyRuntimeContext())
 from `str | None`, is a major bump. Adding sibling helpers is a minor
 bump.
 
-**Why `bind_context` is async-only.** Per-request tenant binding has to
-survive every `await` between the FastAPI handler and the next DB
-transaction the SQLAlchemy engine opens. `with_context(fn)` is
-synchronous by contract — if `fn` returns a coroutine, the consumer
-would reset its binding before the caller awaits it. The dedicated
-async context manager keeps the binding alive across awaits and
-guarantees deterministic reset on exit (including on exception).
+**Why `bind_context` is async-only.** Per-request context binding has to
+survive every `await` between the request handler and the next operation
+that may observe the bound state. `with_context(fn)` is synchronous by
+contract — if `fn` returns a coroutine, the consumer would reset its
+binding before the caller awaits it. The dedicated async context manager
+keeps the binding alive across awaits and guarantees deterministic reset
+on exit (including on exception).
 
 ### 3. `usage_reporter`
 
