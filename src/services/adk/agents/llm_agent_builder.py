@@ -50,7 +50,12 @@ from google.adk.models.llm_response import LlmResponse
 from sqlalchemy.orm import Session
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from .agent_utils import get_sub_agents, get_api_key, sanitize_for_formatting
+from .agent_utils import (
+    get_sub_agents,
+    get_api_key,
+    normalize_model_for_provider,
+    sanitize_for_formatting,
+)
 
 logger = setup_logger(__name__)
 
@@ -980,8 +985,8 @@ class LlmAgentBuilder:
                 f"Agent {agent.name} has preload_memory enabled but load_memory is disabled. preload_memory requires load_memory to be enabled."
             )
 
-        # Get API key from api_key_id
-        api_key = await get_api_key(self.db, agent)
+        # Get API key (and provider, when stored) from api_key_id
+        api_key, api_key_provider = await get_api_key(self.db, agent)
 
         # Get output_key from config if specified
         output_key = agent.config.get("output_key") if agent.config else None
@@ -1116,9 +1121,17 @@ class LlmAgentBuilder:
                 except Exception as e:
                     logger.error(f"❌ Error calling to_function_declaration() on {mcp_tools[0].name}: {e}")
         
+        # Normalize model for provider routing (EVO-1684: OpenRouter keys must
+        # use the `openrouter/` prefix or LiteLLM routes to the wrong vendor).
+        litellm_model, litellm_extra_kwargs = normalize_model_for_provider(
+            agent.model, api_key_provider
+        )
+
         llm_agent_kwargs = {
             "name": agent.name,
-            "model": LiteLlm(model=agent.model, api_key=api_key),
+            "model": LiteLlm(
+                model=litellm_model, api_key=api_key, **litellm_extra_kwargs
+            ),
             "instruction": formatted_prompt,
             "description": agent.description,
             "tools": all_tools,

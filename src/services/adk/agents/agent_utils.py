@@ -33,10 +33,19 @@ from google.adk.agents.llm_agent import LlmAgent
 from src.services.adk.tools.exit_loop import ExitLoopAgent
 from src.services.apikey_service import get_decrypted_api_key
 from src.utils.logger import setup_logger
+from src.utils.llm_model_routing import normalize_model_for_provider  # re-export
 from src.core.exceptions import AgentNotFoundError
 from src.services.agent_service import get_agent
+from src.models.models import ApiKey
 from sqlalchemy.orm import Session
 from src.schemas.schemas import Agent
+
+__all__ = [
+    "get_sub_agents",
+    "get_api_key",
+    "normalize_model_for_provider",
+    "sanitize_for_formatting",
+]
 
 logger = setup_logger(__name__)
 
@@ -181,12 +190,25 @@ async def get_sub_agents(
     return sub_agents, all_state_params
 
 
-async def get_api_key(db: Session, agent: Agent) -> str:
-    """Get the API key for the agent."""
+async def get_api_key(db: Session, agent: Agent) -> Tuple[str, Optional[str]]:
+    """Get the API key and provider for the agent.
+
+    Returns:
+        Tuple of (api_key, provider). `provider` is the stored value from
+        ``evo_core_api_keys.provider`` when the agent references a stored key
+        via ``api_key_id``; otherwise ``None`` (config-supplied raw keys carry
+        no provider metadata). Needed by callers that route through LiteLLM —
+        e.g. OpenRouter keys must be prefixed with ``openrouter/`` (EVO-1684).
+    """
     api_key = None
+    provider: Optional[str] = None
 
     # Get API key from api_key_id
     if hasattr(agent, "api_key_id") and agent.api_key_id:
+        api_key_record = db.query(ApiKey).filter(ApiKey.id == agent.api_key_id).first()
+        if api_key_record:
+            provider = api_key_record.provider
+
         if decrypted_key := get_decrypted_api_key(db, agent.api_key_id):
             logger.info(f"Using stored API key for agent {agent.name}")
             api_key = decrypted_key
@@ -216,7 +238,7 @@ async def get_api_key(db: Session, agent: Agent) -> str:
             logger.error(f"No API key configured for agent {agent.name}")
             raise ValueError(f"Agent {agent.name} does not have a configured API key")
 
-    return api_key
+    return api_key, provider
 
 
 def sanitize_for_formatting(instruction: str) -> str:
