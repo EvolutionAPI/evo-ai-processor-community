@@ -73,7 +73,6 @@ from src.api.a2a_routes import verify_api_key
 from src.middleware.permissions import RequirePermission
 from src.services.agent_service import get_agent
 from src.utils.response import success_response, error_response, map_status_to_error_code
-from src.utils.event_json import normalize_event_for_json
 from src.schemas.responses import SuccessResponse, ErrorResponse, PaginatedResponse
 from src.schemas.response_models import SessionMetricsResponse
 from src.schemas.schemas import (
@@ -631,9 +630,6 @@ async def get_agent_messages(
                 continue
 
             try:
-                # Process all event dictionary
-                event_dict = normalize_event_for_json(event_dict)
-
                 # Process the content parts specifically
                 if event_dict.get("content") and event_dict["content"].get("parts"):
                     for part in event_dict["content"]["parts"]:
