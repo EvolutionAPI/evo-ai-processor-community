@@ -125,3 +125,100 @@ class TestUsageReporterOverride:
         evo_extension_points.replace("usage_reporter", BoomReporter())
         result = _mirror_runner_hooks({})
         assert result["reported"] is False
+
+
+class TestBindContextWrap:
+    """Mirror the ``async with runtime_context.bind_context(...)`` wrap
+    added to ``StandardRunner.run_agent``.
+
+    These tests do not execute the full runner; they reproduce the wrap
+    shape so a future change to it is caught alongside the EP contract.
+    """
+
+    @staticmethod
+    async def _mirror_bind_wrap(context_id):
+        from contextlib import nullcontext
+
+        events = []
+        async with (
+            runtime_context.bind_context(context_id)
+            if context_id
+            else nullcontext()
+        ):
+            events.append("inside")
+        events.append("after")
+        return events
+
+    @pytest.mark.asyncio
+    async def test_default_bind_is_noop_async_cm(self):
+        # No consumer registered; community default returns a no-op async CM.
+        events = await self._mirror_bind_wrap("ctx-1")
+        assert events == ["inside", "after"]
+
+    @pytest.mark.asyncio
+    async def test_null_branch_when_context_id_is_none(self):
+        # nullcontext() must support async with on Python 3.10+.
+        events = await self._mirror_bind_wrap(None)
+        assert events == ["inside", "after"]
+
+    @pytest.mark.asyncio
+    async def test_consumer_bind_context_is_invoked(self):
+        from contextlib import asynccontextmanager
+
+        seen = {"enter": 0, "exit": 0, "id": None}
+
+        class Consumer:
+            def current_context_id(self, source):
+                return None
+
+            def with_context(self, context_id, fn):
+                return fn()
+
+            @asynccontextmanager
+            async def bind_context(self, context_id):
+                seen["enter"] += 1
+                seen["id"] = context_id
+                try:
+                    yield
+                finally:
+                    seen["exit"] += 1
+
+        evo_extension_points.replace("runtime_context", Consumer())
+        events = await self._mirror_bind_wrap("ctx-from-consumer")
+        assert events == ["inside", "after"]
+        assert seen == {"enter": 1, "exit": 1, "id": "ctx-from-consumer"}
+
+    @pytest.mark.asyncio
+    async def test_consumer_bind_context_resets_on_exception(self):
+        from contextlib import asynccontextmanager
+
+        seen = {"enter": 0, "exit": 0}
+
+        class Consumer:
+            def current_context_id(self, source):
+                return None
+
+            def with_context(self, context_id, fn):
+                return fn()
+
+            @asynccontextmanager
+            async def bind_context(self, context_id):
+                seen["enter"] += 1
+                try:
+                    yield
+                finally:
+                    seen["exit"] += 1
+
+        evo_extension_points.replace("runtime_context", Consumer())
+
+        from contextlib import nullcontext
+
+        with pytest.raises(RuntimeError):
+            async with (
+                runtime_context.bind_context("ctx-x")
+                if "ctx-x"
+                else nullcontext()
+            ):
+                raise RuntimeError("boom in body")
+
+        assert seen == {"enter": 1, "exit": 1}

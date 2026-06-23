@@ -1057,6 +1057,7 @@ async def handle_message_send(
             files=files if files else None,
             metadata=metadata,
             user_id=user_id,  # Pass contact_id as user_id
+            request=request,
         )
 
         final_response = result.get("final_response", "No response")

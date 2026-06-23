@@ -34,7 +34,7 @@ from src.services.adk.runners.standard_runner import StandardRunner
 from src.services.adk.runners.streaming_runner import StreamingRunner
 from src.services.adk.runners.live_runner import LiveRunner
 from sqlalchemy.orm import Session
-from typing import Optional, AsyncGenerator, Dict, Any
+from typing import Any, AsyncGenerator, Dict, Optional
 
 
 async def run_agent(
@@ -50,6 +50,7 @@ async def run_agent(
     files: Optional[list] = None,
     metadata: Optional[Dict[str, Any]] = None,
     user_id: Optional[str] = None,
+    request: Any = None,
 ) -> Dict[str, Any]:
     """Execute a non-streaming agent request."""
     runner = StandardRunner(db)
@@ -65,6 +66,7 @@ async def run_agent(
         files=files,
         metadata=metadata,
         user_id=user_id,
+        request=request,
     )
 
 
