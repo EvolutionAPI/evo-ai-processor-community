@@ -73,6 +73,7 @@ from src.api.a2a_routes import verify_api_key
 from src.middleware.permissions import RequirePermission
 from src.services.agent_service import get_agent
 from src.utils.response import success_response, error_response, map_status_to_error_code
+from src.utils.event_json import normalize_event_for_json
 from src.schemas.responses import SuccessResponse, ErrorResponse, PaginatedResponse
 from src.schemas.response_models import SessionMetricsResponse
 from src.schemas.schemas import (
@@ -629,39 +630,9 @@ async def get_agent_messages(
                 skipped_count += 1
                 continue
 
-            def process_dict(d):
-                if isinstance(d, dict):
-                    for key, value in list(d.items()):
-                        if isinstance(value, bytes):
-                            try:
-                                d[key] = base64.b64encode(value).decode("utf-8")
-                                logger.debug(f"Converted bytes field to base64: {key}")
-                            except Exception as e:
-                                logger.error(f"Error encoding bytes to base64: {str(e)}")
-                                d[key] = None
-                        elif isinstance(value, dict):
-                            process_dict(value)
-                        elif isinstance(value, list):
-                            for item in value:
-                                if isinstance(item, (dict, list)):
-                                    process_dict(item)
-                elif isinstance(d, list):
-                    for i, item in enumerate(d):
-                        if isinstance(item, bytes):
-                            try:
-                                d[i] = base64.b64encode(item).decode("utf-8")
-                            except Exception as e:
-                                logger.error(
-                                    f"Error encoding bytes to base64 in list: {str(e)}"
-                                )
-                                d[i] = None
-                        elif isinstance(item, (dict, list)):
-                            process_dict(item)
-                return d
-
             try:
                 # Process all event dictionary
-                event_dict = process_dict(event_dict)
+                event_dict = normalize_event_for_json(event_dict)
 
                 # Process the content parts specifically
                 if event_dict.get("content") and event_dict["content"].get("parts"):
