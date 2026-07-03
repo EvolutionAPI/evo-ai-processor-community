@@ -19,7 +19,9 @@ env:
 
 jobs:
   build-pr:
-    if: github.event_name == 'pull_request'
+    # Só PR interna (mesmo repo): PR de fork não tem os secrets DOCKERHUB_* e
+    # não deve buildar/pushar código não-confiável com nossas credenciais.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     name: Build PR image (amd64)
     runs-on: ubuntu-latest
     steps:
