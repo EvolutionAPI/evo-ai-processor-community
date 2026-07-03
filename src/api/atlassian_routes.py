@@ -28,6 +28,9 @@ from src.schemas.response_models import (
 # Get Atlassian service instance (create without user token for callback)
 from src.services.global_config_service import get_global_config_service
 
+from src.api.dependencies import get_current_user
+from src.middleware.permissions import RequirePermission
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -129,6 +132,8 @@ async def get_atlassian_service_optional(
 async def discover_oauth_requirements(
     agent_id: str,
     service: AtlassianService = Depends(get_atlassian_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Discover OAuth requirements from Atlassian MCP server.
@@ -162,6 +167,8 @@ async def discover_oauth_requirements(
 async def generate_authorization(
     agent_id: str,
     service: AtlassianService = Depends(get_atlassian_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Generate OAuth 2.0 authorization URL for Atlassian MCP.
@@ -203,6 +210,8 @@ async def complete_authorization(
     request: CallbackRequest,
     db: Session = Depends(get_db),
     service: AtlassianService = Depends(get_atlassian_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Complete OAuth authorization flow and store tokens.
@@ -262,6 +271,8 @@ async def get_configuration(
     request: Request,
     db: Session = Depends(get_db),
     service: Optional[AtlassianService] = Depends(get_atlassian_service_optional),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """Get Atlassian integration configuration. Creates default config if not found."""
     try:
@@ -323,6 +334,8 @@ async def discover_tools(
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[AtlassianService] = Depends(get_atlassian_service_optional),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """Discover available MCP tools from Atlassian using stored access_token."""
     from src.api.mcp_integration_base import discover_tools_endpoint
@@ -352,6 +365,8 @@ async def update_configuration(
     request: Request,
     db: Session = Depends(get_db),
     service: AtlassianService = Depends(get_atlassian_service),
+    _permission: None = Depends(RequirePermission("integrations", "update")),
+    _: dict = Depends(get_current_user),
 ):
     """Save Atlassian integration configuration."""
     try:
@@ -429,6 +444,8 @@ async def update_configuration(
 async def disconnect(
     agent_id: str,
     service: AtlassianService = Depends(get_atlassian_service),
+    _permission: None = Depends(RequirePermission("integrations", "disconnect")),
+    _: dict = Depends(get_current_user),
 ):
     """Disconnect Atlassian integration."""
     try:

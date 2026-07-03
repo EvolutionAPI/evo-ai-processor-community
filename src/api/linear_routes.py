@@ -26,6 +26,9 @@ from src.schemas.response_models import (
     IntegrationConfigResponse, DiscoverToolsResponse, DisconnectResponse
 )
 
+from src.api.dependencies import get_current_user
+from src.middleware.permissions import RequirePermission
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -161,6 +164,8 @@ async def get_linear_service(
 async def discover_oauth(
     agent_id: str,
     service: LinearService = Depends(get_linear_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Discover OAuth requirements from Linear MCP server.
@@ -197,6 +202,8 @@ async def discover_oauth(
 async def generate_authorization(
     agent_id: str,
     service: LinearService = Depends(get_linear_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Generate OAuth 2.0 authorization URL for Linear MCP.
@@ -240,6 +247,8 @@ async def complete_authorization(
     request: CallbackRequest,
     db: Session = Depends(get_db),
     service: LinearService = Depends(get_linear_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Complete OAuth authorization flow and store tokens.
@@ -298,6 +307,8 @@ async def get_configuration(
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[LinearService] = Depends(get_linear_service_optional),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """Get Linear integration configuration. Creates default config if not found."""
     try:
@@ -374,6 +385,8 @@ async def discover_tools(
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[LinearService] = Depends(get_linear_service_optional),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """Discover available MCP tools from Linear using stored access_token."""
     from src.api.mcp_integration_base import discover_tools_endpoint
@@ -405,6 +418,8 @@ async def save_configuration(
     config: Dict[str, Any],
     db: Session = Depends(get_db),
     service: LinearService = Depends(get_linear_service),
+    _permission: None = Depends(RequirePermission("integrations", "update")),
+    _: dict = Depends(get_current_user),
 ):
     """Save Linear integration configuration."""
     try:
@@ -482,6 +497,8 @@ async def save_configuration(
 async def disconnect(
     agent_id: str,
     service: LinearService = Depends(get_linear_service),
+    _permission: None = Depends(RequirePermission("integrations", "disconnect")),
+    _: dict = Depends(get_current_user),
 ):
     """Disconnect Linear integration."""
     try:
