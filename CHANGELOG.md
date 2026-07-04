@@ -5,6 +5,30 @@ All notable changes to this microservice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v1.0.0-rc6] - 2026-07-04
+
+Security and bug-fix release — closes the processor half of the EVO-1956 RBAC audit (third-party integration routes were reachable by any authenticated user), fixes OpenRouter key routing in LiteLLM, and eliminates the 500 on the session messages endpoint caused by non-JSON-serializable ADK payloads.
+
+### Security
+
+- **RBAC — integrations routes gated with `RequirePermission` (EVO-1956)** — the bulk integrations endpoint and the 12 third-party provider modules (GitHub, Google Calendar, Google Sheets, Notion, Linear, Monday, Atlassian, Asana, HubSpot, PayPal, Canva, Supabase) were fully reachable by any authenticated user, with no permission checks. 82 handlers are now gated by operation semantics (read / connect / update / create / disconnect), and a contract test locks in the invariants: every main-router endpoint must carry a gate with `resource=integrations` and an allow-listed action, while OAuth `callback_router` endpoints remain unauthenticated by design (browser redirects from external OAuth providers carry no CRM bearer token).
+
+### Fixed
+
+- **LiteLLM — OpenRouter key routed to the wrong vendor (EVO-1684)** (#15) — LiteLLM routes requests by the vendor embedded in the model id. When the API key's provider was OpenRouter but the agent model was e.g. `openai/gpt-4.1`, the request went to OpenAI with an OpenRouter key (`sk-or-v1-...`) and failed with `AuthenticationError`. Model ids are now normalized with the `openrouter/` prefix (idempotent, vendor preserved) and `api_base` is set to `https://openrouter.ai/api/v1` when the provider is OpenRouter. The `GeminiWithApiKey` path is untouched.
+- **Sessions — 500 on `GET /sessions/{id}/messages` from `set`/`frozenset` in ADK payloads (EVO-1752)** (#16) — ADK event dicts could contain Python sets, which the default JSON encoder cannot serialize, aborting the whole response with a 500. Response helpers now go through `SafeJSONResponse` (making the API set-safe by construction), with regression coverage for the failing payload shapes.
+- **`manage_conversation_labels` — guard against destructive replacement** — the tool reads current labels and merges before posting, because the CRM endpoint replaces (not appends) the label set. If the read came back empty due to a transient failure, the merge over an empty list would silently wipe existing labels (including the one keeping the AI eligible for the conversation). The add is now aborted when the read is empty and untrusted (non-200 status), instead of performing a destructive replace.
+- **Chat token validation — `EvoAuthResponse` handling** — token validation now uses `EvoAuthResponse` directly instead of accessing a non-existent `.data` attribute.
+- **Init — module aliasing** — ensures consistent module aliasing for registry access.
+
+### Changed
+
+- **CI — per-PR images for the review environment (EVO-1998)** — internal pull requests targeting `main`/`develop` now publish `:pr-<N>` and `:sha-<sha7>` images (amd64) for the review environment; multi-arch branch/tag builds are unchanged. The PR build job is gated to internal PRs (forks have no secrets).
+
+### Notes for upgrade
+
+- **RBAC**: after upgrading, roles need the `integrations.*` permissions to use the integrations endpoints and third-party providers; clients whose roles lack them will receive `403`. Review your role definitions before rolling out.
+
 ## [v1.0.0-rc5] - 2026-05-27
 
 Hardening release — eliminates the processor's contribution to the fresh-install authentication failure. Also folds in the organization rename from `EvolutionAPI` to `evolution-foundation` across documentation.
@@ -120,6 +144,7 @@ Integration release — adds native tools for the LLM agent (Knowledge Nexus sea
 
 Older versions and future releases will be listed here.
 
+[v1.0.0-rc6]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc5...v1.0.0-rc6
 [v1.0.0-rc5]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc4...v1.0.0-rc5
 [v1.0.0-rc4]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc3...v1.0.0-rc4
 [v1.0.0-rc3]: https://github.com/evolution-foundation/evo-ai-processor-community/compare/v1.0.0-rc2...v1.0.0-rc3
