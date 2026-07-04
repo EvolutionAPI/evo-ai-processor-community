@@ -25,6 +25,9 @@ from src.schemas.response_models import (
     AvailabilityResponse, CreateEventResponse, DisconnectResponse
 )
 
+from src.api.dependencies import get_current_user
+from src.middleware.permissions import RequirePermission
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -203,6 +206,8 @@ async def generate_authorization(
     agent_id: str,
     request: AuthorizationRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Generate OAuth 2.0 authorization URL for Google Calendar.
@@ -244,6 +249,8 @@ async def complete_authorization(
     request: CallbackRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
     db: Session = Depends(get_db),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Complete OAuth 2.0 authorization flow.
@@ -304,6 +311,8 @@ async def get_calendars(
     agent_id: str,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
     db: Session = Depends(get_db),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Get list of available Google Calendars.
@@ -351,6 +360,8 @@ async def save_configuration(
     agent_id: str,
     request: ConfigurationRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
+    _permission: None = Depends(RequirePermission("integrations", "update")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Save Google Calendar configuration.
@@ -391,6 +402,8 @@ async def save_configuration(
 async def disconnect(
     agent_id: str,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
+    _permission: None = Depends(RequirePermission("integrations", "disconnect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Disconnect Google Calendar integration.
@@ -431,6 +444,8 @@ async def check_availability(
     agent_id: str,
     request: AvailabilityRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Check calendar availability for a time range.
@@ -486,6 +501,8 @@ async def create_event(
     agent_id: str,
     request: CreateEventRequest,
     service: GoogleCalendarService = Depends(get_google_calendar_service),
+    _permission: None = Depends(RequirePermission("integrations", "create")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Create a new calendar event.

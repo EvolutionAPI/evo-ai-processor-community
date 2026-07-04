@@ -11,7 +11,9 @@ from typing import Dict, Any
 from fastapi import APIRouter, HTTPException, Depends, status, Request
 from sqlalchemy.orm import Session
 
+from src.api.dependencies import get_current_user
 from src.config.database import get_db
+from src.middleware.permissions import RequirePermission
 from src.services.global_config_service import get_global_config_service
 from src.utils.response import success_response, error_response, map_status_to_error_code
 from src.schemas.responses import SuccessResponse, ErrorResponse
@@ -148,6 +150,8 @@ async def get_all_configurations(
     agent_id: str,
     request: Request,
     db: Session = Depends(get_db),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Get all integration configurations at once, including credentials status.

@@ -25,6 +25,9 @@ from src.schemas.response_models import (
     DisconnectResponse
 )
 
+from src.api.dependencies import get_current_user
+from src.middleware.permissions import RequirePermission
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -159,6 +162,8 @@ async def generate_authorization(
     authorization_request: AuthorizationRequest,
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Generate OAuth 2.0 authorization URL for Google Sheets.
@@ -201,6 +206,8 @@ async def complete_authorization(
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
     db: Session = Depends(get_db),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Complete OAuth 2.0 authorization flow.
@@ -265,6 +272,8 @@ async def get_spreadsheets(
     agent_id: str,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
     db: Session = Depends(get_db),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Get list of available Google Sheets spreadsheets.
@@ -317,6 +326,8 @@ async def save_configuration(
     config_request: ConfigurationRequest,
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
+    _permission: None = Depends(RequirePermission("integrations", "update")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Save Google Sheets configuration.
@@ -358,6 +369,8 @@ async def disconnect(
     agent_id: str,
     request: Request,
     service: GoogleSheetsService = Depends(get_google_sheets_service),
+    _permission: None = Depends(RequirePermission("integrations", "disconnect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Disconnect Google Sheets integration.

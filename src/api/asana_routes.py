@@ -26,6 +26,9 @@ from src.schemas.response_models import (
     IntegrationConfigResponse, DiscoverToolsResponse, DisconnectResponse
 )
 
+from src.api.dependencies import get_current_user
+from src.middleware.permissions import RequirePermission
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -128,6 +131,8 @@ async def get_asana_service_optional(
 async def discover_oauth_requirements(
     agent_id: str,
     service: AsanaService = Depends(get_asana_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Discover OAuth requirements from Asana MCP server.
@@ -160,6 +165,8 @@ async def discover_oauth_requirements(
 async def generate_authorization(
     agent_id: str,
     service: AsanaService = Depends(get_asana_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Generate OAuth 2.0 authorization URL for Asana MCP.
@@ -201,6 +208,8 @@ async def complete_authorization(
     request: CallbackRequest,
     db: Session = Depends(get_db),
     service: AsanaService = Depends(get_asana_service),
+    _permission: None = Depends(RequirePermission("integrations", "connect")),
+    _: dict = Depends(get_current_user),
 ):
     """
     Complete OAuth authorization flow and store tokens.
@@ -261,6 +270,8 @@ async def get_configuration(
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[AsanaService] = Depends(get_asana_service_optional),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """Get Asana integration configuration. Creates default config if not found."""
     try:
@@ -321,6 +332,8 @@ async def discover_tools(
     agent_id: str,
     db: Session = Depends(get_db),
     service: Optional[AsanaService] = Depends(get_asana_service_optional),
+    _permission: None = Depends(RequirePermission("integrations", "read")),
+    _: dict = Depends(get_current_user),
 ):
     """Discover available MCP tools from Asana using stored access_token."""
     from src.api.mcp_integration_base import discover_tools_endpoint
@@ -348,6 +361,8 @@ async def update_configuration(
     config: Dict[str, Any],
     db: Session = Depends(get_db),
     service: AsanaService = Depends(get_asana_service),
+    _permission: None = Depends(RequirePermission("integrations", "update")),
+    _: dict = Depends(get_current_user),
 ):
     """Save Asana integration configuration."""
     try:
@@ -426,6 +441,8 @@ async def disconnect(
     request: Request,
     agent_id: str,
     service: AsanaService = Depends(get_asana_service),
+    _permission: None = Depends(RequirePermission("integrations", "disconnect")),
+    _: dict = Depends(get_current_user),
 ):
     """Disconnect Asana integration."""
     try:
