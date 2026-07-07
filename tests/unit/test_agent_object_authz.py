@@ -137,3 +137,46 @@ class TestAgentBotPermissionScope:
         with pytest.raises(HTTPException) as exc:
             run(service.validate_permission(request, "integrations", "read"))
         assert exc.value.status_code == 403
+
+
+class TestUserPermissionOnIntegrationWrites:
+    """A regular user without the granted key is denied on gated routes —
+    the 403 path RequirePermission enforces on the integration credential
+    writes (save credentials / connect / disconnect)."""
+
+    def make_service(self):
+        with patch("src.services.permission_service.EvoAuthService"):
+            service = PermissionService("http://auth.test")
+        return service
+
+    def make_request(self, context):
+        request = MagicMock()
+        request.state.user_context = context
+        request.url.path = f"/api/v1/agents/{AGENT_ID}/integrations/github/credentials"
+        return request
+
+    def user_context(self):
+        return {
+            "is_agent_bot": False,
+            "user_id": "u-1",
+            "token_info": {"access_token": "tok", "type": "bearer"},
+        }
+
+    def test_user_without_permission_gets_403(self):
+        from unittest.mock import AsyncMock
+
+        service = self.make_service()
+        service.evo_auth_service.check_permission = AsyncMock(return_value=False)
+
+        with pytest.raises(HTTPException) as exc:
+            run(service.validate_permission(self.make_request(self.user_context()), "integrations", "update"))
+        assert exc.value.status_code == 403
+        assert exc.value.detail["permission"] == "integrations.update"
+
+    def test_user_with_permission_passes(self):
+        from unittest.mock import AsyncMock
+
+        service = self.make_service()
+        service.evo_auth_service.check_permission = AsyncMock(return_value=True)
+
+        assert run(service.validate_permission(self.make_request(self.user_context()), "integrations", "update")) is None
