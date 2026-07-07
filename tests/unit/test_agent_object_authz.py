@@ -1,0 +1,139 @@
+"""Object-level authorization for agents.
+
+The Community box is single-tenant (agents have no owner column), so the
+object boundary enforced here is: agent-bot credentials act only on their own
+agent, a missing user context fails closed, regular users keep pool access
+(flagged as shared when granted via folder share), and a bot token only
+bypasses route RBAC on paths scoped to its own agent.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+import pytest
+from fastapi import HTTPException
+
+from src.api.dependencies import verify_agent_access
+from src.services.permission_service import PermissionService
+
+AGENT_ID = "11111111-1111-1111-1111-111111111111"
+OTHER_AGENT_ID = "22222222-2222-2222-2222-222222222222"
+
+
+def make_agent(agent_id=AGENT_ID, folder_id=None):
+    return SimpleNamespace(id=agent_id, folder_id=folder_id)
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+class TestVerifyAgentAccess:
+    def test_missing_user_context_fails_closed(self):
+        with pytest.raises(HTTPException) as exc:
+            run(verify_agent_access(MagicMock(), make_agent(), "read", None))
+        assert exc.value.status_code == 403
+
+    def test_agent_bot_can_access_its_own_agent(self):
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID}
+        has_access, is_shared = run(
+            verify_agent_access(MagicMock(), make_agent(AGENT_ID), "read", context)
+        )
+        assert has_access is True
+        assert is_shared is False
+
+    def test_agent_bot_is_denied_on_another_agent(self):
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID}
+        with pytest.raises(HTTPException) as exc:
+            run(verify_agent_access(MagicMock(), make_agent(OTHER_AGENT_ID), "write", context))
+        assert exc.value.status_code == 403
+
+    def test_agent_bot_without_agent_id_is_denied(self):
+        context = {"is_agent_bot": True}
+        with pytest.raises(HTTPException) as exc:
+            run(verify_agent_access(MagicMock(), make_agent(), "read", context))
+        assert exc.value.status_code == 403
+
+    def test_user_has_pool_access_without_folder(self):
+        context = {"is_agent_bot": False, "email": "user@example.com"}
+        has_access, is_shared = run(
+            verify_agent_access(MagicMock(), make_agent(), "read", context)
+        )
+        assert has_access is True
+        assert is_shared is False
+
+    def test_user_access_is_flagged_shared_via_folder_share(self):
+        context = {"is_agent_bot": False, "email": "user@example.com"}
+        agent = make_agent(folder_id="33333333-3333-3333-3333-333333333333")
+        with patch(
+            "src.api.dependencies.folder_share_service.check_folder_access", return_value=True
+        ):
+            has_access, is_shared = run(verify_agent_access(MagicMock(), agent, "read", context))
+        assert has_access is True
+        assert is_shared is True
+
+    def test_folder_share_lookup_failure_keeps_pool_access(self):
+        context = {"is_agent_bot": False, "email": "user@example.com"}
+        agent = make_agent(folder_id="33333333-3333-3333-3333-333333333333")
+        with patch(
+            "src.api.dependencies.folder_share_service.check_folder_access",
+            side_effect=RuntimeError("db down"),
+        ):
+            has_access, is_shared = run(verify_agent_access(MagicMock(), agent, "read", context))
+        assert has_access is True
+        assert is_shared is False
+
+
+class TestAgentBotPermissionScope:
+    def make_service(self):
+        with patch("src.services.permission_service.EvoAuthService"):
+            return PermissionService("http://auth.test")
+
+    def make_request(self, path, context):
+        request = MagicMock()
+        request.state.user_context = context
+        request.url.path = path
+        return request
+
+    def test_path_scoped_to_agent_matches_segment_and_session_suffix(self):
+        assert PermissionService._path_scoped_to_agent(
+            f"/api/v1/agents/{AGENT_ID}/integrations/github/status", AGENT_ID
+        )
+        assert PermissionService._path_scoped_to_agent(f"/api/v1/chat/{AGENT_ID}", AGENT_ID)
+        assert PermissionService._path_scoped_to_agent(
+            f"/api/v1/sessions/sync/display_{AGENT_ID}", AGENT_ID
+        )
+        assert not PermissionService._path_scoped_to_agent("/api/v1/clients/usage", AGENT_ID)
+        assert not PermissionService._path_scoped_to_agent(
+            f"/api/v1/agents/{OTHER_AGENT_ID}/integrations/github/status", AGENT_ID
+        )
+
+    def test_bot_bypasses_rbac_only_on_its_own_agent_path(self):
+        service = self.make_service()
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID, "token_info": {}}
+
+        request = self.make_request(f"/api/v1/agents/{AGENT_ID}/integrations/github/status", context)
+        assert run(service.validate_permission(request, "integrations", "read")) is None
+
+    def test_bot_is_denied_rbac_bypass_on_unscoped_path(self):
+        service = self.make_service()
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID, "token_info": {}}
+
+        request = self.make_request("/api/v1/clients/usage", context)
+        with pytest.raises(HTTPException) as exc:
+            run(service.validate_permission(request, "ai_clients", "usage"))
+        assert exc.value.status_code == 403
+
+    def test_bot_is_denied_rbac_bypass_on_another_agents_path(self):
+        service = self.make_service()
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID, "token_info": {}}
+
+        request = self.make_request(
+            f"/api/v1/agents/{OTHER_AGENT_ID}/integrations/github/status", context
+        )
+        with pytest.raises(HTTPException) as exc:
+            run(service.validate_permission(request, "integrations", "read"))
+        assert exc.value.status_code == 403

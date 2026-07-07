@@ -60,7 +60,14 @@ class PermissionService:
         """
         return await self.evo_auth_service.check_permission(auth_token, permission_key, token_type)
     
-    async def validate_permission(self, request: Request, resource: str, action: str) -> None:        
+    @staticmethod
+    def _path_scoped_to_agent(path: str, agent_id: str) -> bool:
+        """True when the request path targets the given agent: the agent_id as
+        a path segment (/agents/{id}/..., /chat/{id}, /a2a/{id}/...) or a
+        session id carrying it as suffix ({display_id}_{agent_id})."""
+        return f"/{agent_id}/" in f"{path}/" or f"_{agent_id}" in path
+
+    async def validate_permission(self, request: Request, resource: str, action: str) -> None:
         # Build permission key
         permission_key = f"{resource}.{action}"
         
@@ -82,11 +89,31 @@ class PermissionService:
         token_info = user_context.get("token_info", {})
         token_type = token_info.get("type", "bearer")
 
-        # Agent Bots have full access (validated by middleware)
+        # Agent Bots bypass RBAC only on routes scoped to their OWN agent
+        # (the middleware validated the key against that agent). A bot key
+        # must not act as a wildcard credential on other routes.
         if user_context.get("is_agent_bot"):
-            logger.info(f"Permission: Agent Bot access granted for permission {permission_key}")
-            return
-        
+            bot_agent_id = str(user_context.get("agent_id") or "")
+            path = str(request.url.path)
+            if bot_agent_id and self._path_scoped_to_agent(path, bot_agent_id):
+                logger.info(f"Permission: Agent Bot access granted for permission {permission_key}")
+                return
+
+            logger.warning(
+                f"Permission: Agent Bot for agent {bot_agent_id or '<unknown>'} denied "
+                f"{permission_key} on unscoped path {path}"
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Insufficient permissions",
+                    "code": "ERR_FORBIDDEN",
+                    "message": "Agent API Key can only access its own agent resources",
+                    "permission": permission_key
+                }
+            )
+
+
         auth_token = token_info.get("access_token")
         if not auth_token:
             logger.error("Token not found in user context")

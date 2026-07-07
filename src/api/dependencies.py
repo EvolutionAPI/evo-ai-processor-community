@@ -35,17 +35,27 @@ async def verify_agent_access(
     db: Session,
     agent: Any,  # Agent object
     required_permission: str = "read",
+    user_context: Optional[Dict[str, Any]] = None,
 ) -> Tuple[bool, bool]:
     """
-    Checks if the user has access to an agent, either by:
-    1. Direct client ownership (admin or client user)
-    2. Folder sharing permissions (for agents in shared folders)
+    Object-level access check for an agent.
+
+    The Community box is single-tenant: agents carry no owner/account column,
+    so every authenticated user shares one agent pool and the coarse RBAC
+    lives in the route-level RequirePermission gates. What this enforces:
+
+    - Agent-bot credentials (is_agent_bot) act only on their OWN agent: a
+      bot key for agent A is denied on agent B.
+    - A missing user_context fails closed, so call sites cannot skip the
+      check accidentally.
+    - Regular users keep pool access; the return flags it as shared access
+      when it flows through an active folder share for the user's email.
 
     Args:
-        #Removed for further handling - payload: JWT payload with user information
         db: Database session
         agent: Agent object to be checked
         required_permission: Required permission ("read" or "write")
+        user_context: Authenticated context set by EvoAuthMiddleware
 
     Returns:
         tuple: (has_access: bool, is_shared_access: bool)
@@ -55,33 +65,39 @@ async def verify_agent_access(
     Raises:
         HTTPException: If access is denied
     """
-    try:
-        return True, False  # Access granted by direct ownership
-    except HTTPException as client_error:
-        # If direct access fails, check folder sharing
-        if agent.folder_id:
-            # Waiting for token implementation to get the user's email
-            user_email = None
-            if user_email:
-                has_folder_access = folder_share_service.check_folder_access(
-                    db, agent.folder_id, user_email, required_permission
+    if not user_context:
+        logger.error("verify_agent_access called without user_context - denying access")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied",
+        )
+
+    if user_context.get("is_agent_bot"):
+        bot_agent_id = str(user_context.get("agent_id") or "")
+        if bot_agent_id and bot_agent_id == str(agent.id):
+            return True, False
+
+        logger.warning(
+            f"Agent Bot for agent {bot_agent_id or '<unknown>'} denied access to agent {agent.id}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Agent API Key can only access its own agent resources",
+        )
+
+    user_email = user_context.get("email")
+    if agent.folder_id and user_email:
+        try:
+            if folder_share_service.check_folder_access(db, agent.folder_id, user_email, required_permission):
+                logger.info(
+                    f"User {user_email} granted {required_permission} access to agent {agent.id} "
+                    f"via shared folder {agent.folder_id}"
                 )
-                if has_folder_access:
-                    logger.info(
-                        f"Usuário {user_email} recebeu acesso {required_permission} ao agente {agent.id} via pasta compartilhada {agent.folder_id}"
-                    )
-                    return True, True
-                else:
-                    logger.warning(
-                        f"Usuário {user_email} negado ao agente {agent.id} - sem permissão de pasta compartilhada"
-                    )
-            else:
-                logger.warning("Nenhum e-mail de usuário encontrado no token para verificação de pasta compartilhada")
-        else:
-            logger.info(
-                f"Agente {agent.id} não está em uma pasta, não é possível verificar compartilhamento de pasta"
-            )
-        raise client_error
+                return True, True
+        except Exception as e:
+            logger.warning(f"Folder share lookup failed for agent {agent.id}: {e}")
+
+    return True, False
 
 def get_request_optional(request: Request) -> Request:
     """Dependency to provide the Request object, making it optional in endpoint signatures."""
