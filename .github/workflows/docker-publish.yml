@@ -143,6 +143,9 @@ jobs:
             TAGS="${IMAGE}:latest,${IMAGE}:main-${SHA_SHORT}"
           elif [[ "${GH_REF}" == refs/heads/develop ]]; then
             TAGS="${IMAGE}:develop,${IMAGE}:develop-${SHA_SHORT}"
+          else
+            echo "::error::Unsupported ref ${GH_REF} — no publish tags derived (expected main, develop, or a v* tag)." >&2
+            exit 1
           fi
 
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
