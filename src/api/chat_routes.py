@@ -58,6 +58,12 @@ from src.services.service_providers import (
 from src.services.adk.memory import MemoryLimitExceeded
 from src.services.session_service import SessionLimitExceeded
 from src.middleware.permissions import RequirePermission
+from src.services.permission_service import PermissionService
+
+# Runtime permission an agent-bot key must hold to invoke an agent over a chat
+# WebSocket. WebSocket routes bypass the HTTP RequirePermission gate, so this
+# confinement is enforced inline against the same allowlist.
+WS_RUNTIME_PERMISSION = "ai_agent_processor.execute"
 
 import logging
 import json
@@ -93,11 +99,18 @@ async def get_jwt_token_ws(token: str, skip_validation: bool = False) -> Optiona
             if auth_response and auth_response.user:
                 # Return user context similar to what middleware does
                 user = auth_response.user.dict() if hasattr(auth_response.user, 'dict') else auth_response.user
+                # Surface agent-bot identity when the token is bound to an agent
+                # (metadata.agent_id), mirroring EvoAuthMiddleware, so WebSocket
+                # handlers can enforce the same per-agent confinement.
+                metadata = getattr(auth_response, "metadata", None) or {}
+                bot_agent_id = metadata.get("agent_id")
                 return {
                     "sub": user.get("email") or user.get("id"),
                     "email": user.get("email"),
                     "user_id": user.get("id"),
                     "user": user,
+                    "is_agent_bot": bool(bot_agent_id),
+                    "agent_id": bot_agent_id,
                 }
         except Exception as e:
             logger.warning(f"EvoAuth token validation failed: {str(e)}")
@@ -144,12 +157,14 @@ async def websocket_chat(
 
         # Verify authentication
         is_authenticated = False
+        auth_payload = None
 
         # Try with token (Bearer token from EvoAuth)
         if auth_data.get("token"):
             try:
                 payload = await get_jwt_token_ws(auth_data["token"], True)
                 if payload:
+                    auth_payload = payload
                     user_id = payload.get("user_id") or payload.get("sub")
                     is_authenticated = True
                     logger.info(f"WebSocket: User {user_id} authenticated for agent {agent_id}")
@@ -162,6 +177,18 @@ async def websocket_chat(
                 is_authenticated = True
 
         if not is_authenticated:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        # Confine agent-bot keys: a bot key may only invoke its OWN agent, and
+        # only for the runtime action. Reject at the handshake before any work.
+        if not PermissionService.is_agent_bot_permission_allowed(
+            auth_payload, websocket.url.path, WS_RUNTIME_PERMISSION
+        ):
+            logger.warning(
+                f"WebSocket: Agent Bot for agent {(auth_payload or {}).get('agent_id')} "
+                f"denied access to agent {agent_id}"
+            )
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             return
 
@@ -402,6 +429,7 @@ async def websocket_live_chat(
         # Start authentication process
         logger.info("=== STARTING AUTHENTICATION PROCESS ===")
         is_authenticated = False
+        auth_payload = None
 
         # Try with JWT token first
         if auth_data.get("token"):
@@ -414,6 +442,7 @@ async def websocket_live_chat(
                 logger.info(f"JWT payload received: {bool(payload)}")
 
                 if payload:
+                    auth_payload = payload
                     logger.info(f"JWT payload keys: {list(payload.keys())}")
                     logger.info(f"JWT payload user: {payload.get('sub', 'N/A')}")
                     logger.info(f"JWT payload email: {payload.get('email', 'N/A')}")
@@ -508,6 +537,21 @@ async def websocket_live_chat(
         if not is_authenticated:
             logger.error("❌ Authentication failed for live WebSocket")
             logger.error("Neither JWT nor API key authentication succeeded")
+            try:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            except:
+                pass  # Already disconnected
+            return
+
+        # Confine agent-bot keys: a bot key may only invoke its OWN agent, and
+        # only for the runtime action. Reject at the handshake before any work.
+        if not PermissionService.is_agent_bot_permission_allowed(
+            auth_payload, websocket.url.path, WS_RUNTIME_PERMISSION
+        ):
+            logger.warning(
+                f"❌ Live WebSocket: Agent Bot for agent "
+                f"{(auth_payload or {}).get('agent_id')} denied access to agent {agent_id}"
+            )
             try:
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
             except:

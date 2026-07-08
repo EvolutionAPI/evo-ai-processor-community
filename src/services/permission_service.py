@@ -41,6 +41,21 @@ class PermissionService:
     across all authentication and authorization operations.
     """
     
+    # Permissions an agent-bot key may exercise on its OWN agent. A bot key is
+    # a runtime credential: it exists to let the agent be invoked and to read
+    # its own conversational state. Management/credential actions (integrations
+    # connect/read/update/disconnect/create, tool config, session lifecycle
+    # mutation, agent deletion) are intentionally absent so a leaked bot key
+    # cannot delete the agent or read/write OAuth credentials. Fail closed:
+    # anything not listed here is denied even on the bot's own agent path.
+    _BOT_RUNTIME_PERMISSIONS = frozenset({
+        "ai_agent_processor.execute",
+        "ai_a2a_protocol.execute",
+        "ai_a2a_protocol.read",
+        "ai_a2a_protocol.task_management",
+        "ai_chat_sessions.read",
+    })
+
     def __init__(self, evo_auth_base_url: str):
         self.evo_auth_service = EvoAuthService(evo_auth_base_url)
         logger.info(f"Permission service initialized with EvoAuthService")
@@ -60,7 +75,46 @@ class PermissionService:
         """
         return await self.evo_auth_service.check_permission(auth_token, permission_key, token_type)
     
-    async def validate_permission(self, request: Request, resource: str, action: str) -> None:        
+    @staticmethod
+    def _path_scoped_to_agent(path: str, agent_id: str) -> bool:
+        """True when the request path targets the given agent: the agent_id is
+        a full path segment (/agents/{id}/..., /chat/{id}, /a2a/{id}/...) or the
+        trailing token of a session-id segment ({display_id}_{agent_id}).
+
+        Canonical segment extraction (no substring matching), so an agent id
+        embedded mid-token in an unrelated value cannot spoof scope.
+        """
+        if not agent_id:
+            return False
+        for segment in path.split("/"):
+            if not segment:
+                continue
+            if segment == agent_id:
+                return True
+            # Session ids embed the agent id as the suffix after the last "_".
+            if "_" in segment and segment.rsplit("_", 1)[-1] == agent_id:
+                return True
+        return False
+
+    @classmethod
+    def is_agent_bot_permission_allowed(
+        cls, user_context: Optional[dict], path: str, permission_key: str
+    ) -> bool:
+        """Shared agent-bot confinement decision, usable outside the HTTP RBAC
+        gate (e.g. WebSocket handshakes that never reach validate_permission).
+
+        Regular (non-bot) contexts are unaffected and always return True. An
+        agent-bot key is allowed only when the path targets its OWN agent and
+        the permission is a runtime action. Fail closed on everything else.
+        """
+        if not user_context or not user_context.get("is_agent_bot"):
+            return True
+        bot_agent_id = str(user_context.get("agent_id") or "")
+        if not bot_agent_id or not cls._path_scoped_to_agent(path, bot_agent_id):
+            return False
+        return permission_key in cls._BOT_RUNTIME_PERMISSIONS
+
+    async def validate_permission(self, request: Request, resource: str, action: str) -> None:
         # Build permission key
         permission_key = f"{resource}.{action}"
         
@@ -82,11 +136,50 @@ class PermissionService:
         token_info = user_context.get("token_info", {})
         token_type = token_info.get("type", "bearer")
 
-        # Agent Bots have full access (validated by middleware)
+        # Agent Bots bypass RBAC only on routes scoped to their OWN agent
+        # (the middleware validated the key against that agent) AND only for
+        # runtime permissions. A bot key must not act as a wildcard credential
+        # on other agents, nor perform management/credential actions (delete
+        # the agent, read/write OAuth credentials) even on its own agent.
         if user_context.get("is_agent_bot"):
+            bot_agent_id = str(user_context.get("agent_id") or "")
+            path = str(request.url.path)
+            scoped_to_own_agent = bool(bot_agent_id) and self._path_scoped_to_agent(path, bot_agent_id)
+
+            if not scoped_to_own_agent:
+                logger.warning(
+                    f"Permission: Agent Bot for agent {bot_agent_id or '<unknown>'} denied "
+                    f"{permission_key} on unscoped path {path}"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Insufficient permissions",
+                        "code": "ERR_FORBIDDEN",
+                        "message": "Agent API Key can only access its own agent resources",
+                        "permission": permission_key
+                    }
+                )
+
+            if permission_key not in self._BOT_RUNTIME_PERMISSIONS:
+                logger.warning(
+                    f"Permission: Agent Bot for agent {bot_agent_id} denied non-runtime "
+                    f"permission {permission_key}"
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "Insufficient permissions",
+                        "code": "ERR_FORBIDDEN",
+                        "message": "Agent API Key is limited to runtime actions on its own agent",
+                        "permission": permission_key
+                    }
+                )
+
             logger.info(f"Permission: Agent Bot access granted for permission {permission_key}")
             return
-        
+
+
         auth_token = token_info.get("access_token")
         if not auth_token:
             logger.error("Token not found in user context")

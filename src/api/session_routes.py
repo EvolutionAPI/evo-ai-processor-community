@@ -185,9 +185,8 @@ async def create_new_session(
             status_code=status.HTTP_404_NOT_FOUND
         )
 
-    # Verify access (skip for agent bots as they're already validated)
-    if not is_agent_bot:
-        has_access, is_shared_access = await verify_agent_access(db, agent, "read")
+    # Verify access (agent bots are constrained to their own agent inside)
+    has_access, is_shared_access = await verify_agent_access(db, agent, "read", current_user)
 
     # Get user identifier
     default_user_id = str(current_user.get("user_id") or current_user.get("email") or "") if current_user else ""
@@ -373,7 +372,7 @@ async def get_agent_sessions(
         )
 
     # Verify if the user has access to the agent (including shared folder access)
-    has_access, is_shared_access = await verify_agent_access(db, agent, "read")
+    has_access, is_shared_access = await verify_agent_access(db, agent, "read", current_user)
 
     # List ALL sessions for the agent (both test sessions and real sessions)
     
@@ -448,7 +447,7 @@ async def bulk_delete_sessions(
                 if agent:
                     try:
                         has_access, is_shared_access = await verify_agent_access(
-                            db, agent, "read"
+                            db, agent, "read", current_user
                         )
                         validated_session_ids.append(session_id)
                     except HTTPException as e:
@@ -542,7 +541,7 @@ async def get_session(
         agent = await agent_service.get_agent(db, agent_id)
         if agent:
             has_access, is_shared_access = await verify_agent_access(
-                db, agent, "read"
+                db, agent, "read", current_user
             )
 
     return success_response(
@@ -595,7 +594,7 @@ async def get_agent_messages(
         agent = await agent_service.get_agent(db, agent_id)
         if agent:
             has_access, is_shared_access = await verify_agent_access(
-                db, agent, "read"
+                db, agent, "read", current_user
             )
 
     # Get app_name and user_id from the session object instead of parsing session_id
@@ -787,7 +786,7 @@ async def remove_session(
             agent = await agent_service.get_agent(db, agent_id)
             if agent:
                 has_access, is_shared_access = await verify_agent_access(
-                    db, agent, "read"
+                    db, agent, "read", current_user
                 )
 
         # Delete the session (from both database and ADK)
@@ -850,7 +849,7 @@ async def get_session_metadata_endpoint(
         agent = await agent_service.get_agent(db, agent_id)
         if agent:
             has_access, is_shared_access = await verify_agent_access(
-                db, agent, "read"
+                db, agent, "read", current_user
             )
 
     # Get metadata
@@ -907,7 +906,7 @@ async def update_session_metadata_endpoint(
         agent = await agent_service.get_agent(db, agent_id)
         if agent:
             has_access, is_shared_access = await verify_agent_access(
-                db, agent, "write"
+                db, agent, "write", current_user
             )
 
     # Use user_id from the authenticated user
@@ -978,7 +977,7 @@ async def delete_session_metadata_endpoint(
         agent = await agent_service.get_agent(db, agent_id)
         if agent:
             has_access, is_shared_access = await verify_agent_access(
-                db, agent, "write"
+                db, agent, "write", current_user
             )
 
     # Use user_id from the authenticated user
