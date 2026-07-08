@@ -10,8 +10,9 @@ bypasses route RBAC on paths scoped to its own agent.
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -235,3 +236,96 @@ class TestUserPermissionOnIntegrationWrites:
         service.evo_auth_service.check_permission = AsyncMock(return_value=True)
 
         assert run(service.validate_permission(self.make_request(self.user_context()), "integrations", "update")) is None
+
+
+RUNTIME_PERMISSION = "ai_agent_processor.execute"
+
+
+class TestIsAgentBotPermissionAllowed:
+    """Shared confinement decision reused by the WebSocket handshake."""
+
+    def test_bot_allowed_runtime_on_own_agent(self):
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID}
+        assert PermissionService.is_agent_bot_permission_allowed(
+            context, f"/chat/ws/{AGENT_ID}/user/sess", RUNTIME_PERMISSION
+        )
+
+    def test_bot_denied_on_another_agent(self):
+        context = {"is_agent_bot": True, "agent_id": OTHER_AGENT_ID}
+        assert not PermissionService.is_agent_bot_permission_allowed(
+            context, f"/chat/ws/{AGENT_ID}/user/sess", RUNTIME_PERMISSION
+        )
+
+    def test_bot_denied_non_runtime_on_own_agent(self):
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID}
+        assert not PermissionService.is_agent_bot_permission_allowed(
+            context, f"/agents/{AGENT_ID}/integrations/github", "integrations.disconnect"
+        )
+
+    def test_bot_without_agent_id_denied(self):
+        context = {"is_agent_bot": True}
+        assert not PermissionService.is_agent_bot_permission_allowed(
+            context, f"/chat/ws/{AGENT_ID}/user/sess", RUNTIME_PERMISSION
+        )
+
+    def test_regular_user_unaffected(self):
+        assert PermissionService.is_agent_bot_permission_allowed(
+            {"is_agent_bot": False}, f"/chat/ws/{OTHER_AGENT_ID}/user/sess", RUNTIME_PERMISSION
+        )
+        assert PermissionService.is_agent_bot_permission_allowed(
+            None, f"/chat/ws/{OTHER_AGENT_ID}/user/sess", RUNTIME_PERMISSION
+        )
+
+
+class TestChatWebSocketAgentBotConfinement:
+    """The chat WebSocket routes bypass the HTTP RequirePermission gate, so the
+    agent-bot confinement is enforced inline at the handshake."""
+
+    def build_client(self, monkeypatch, bot_agent_id):
+        import src.api.chat_routes as chat_routes
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from src.config.database import get_db
+
+        fake_agent = SimpleNamespace(id=AGENT_ID, name="agent-a", folder_id=None, config=None)
+        monkeypatch.setattr(
+            chat_routes.agent_service, "get_agent", AsyncMock(return_value=fake_agent)
+        )
+        monkeypatch.setattr(
+            chat_routes,
+            "get_jwt_token_ws",
+            AsyncMock(return_value={
+                "is_agent_bot": True,
+                "agent_id": bot_agent_id,
+                "user_id": "bot",
+            }),
+        )
+
+        async def fake_stream(**kwargs):
+            yield json.dumps({"reply": "ok"})
+
+        monkeypatch.setattr(chat_routes, "run_agent_stream", fake_stream)
+
+        app = FastAPI()
+        app.include_router(chat_routes.router)
+        app.dependency_overrides[get_db] = lambda: None
+        return TestClient(app)
+
+    def test_bot_for_other_agent_rejected_at_handshake(self, monkeypatch):
+        from starlette.websockets import WebSocketDisconnect
+
+        client = self.build_client(monkeypatch, bot_agent_id=OTHER_AGENT_ID)
+        with client.websocket_connect(f"/chat/ws/{AGENT_ID}/user/sess") as ws:
+            ws.send_json({"type": "authorization", "token": "t"})
+            with pytest.raises(WebSocketDisconnect) as exc:
+                ws.receive_json()
+        assert exc.value.code == 1008
+
+    def test_bot_for_own_agent_accepted_and_runs(self, monkeypatch):
+        client = self.build_client(monkeypatch, bot_agent_id=AGENT_ID)
+        with client.websocket_connect(f"/chat/ws/{AGENT_ID}/user/sess") as ws:
+            ws.send_json({"type": "authorization", "token": "t"})
+            ws.send_json({"message": "hi"})
+            first = ws.receive_json()
+        assert first["turn_complete"] is False
+        assert first["message"] == {"reply": "ok"}

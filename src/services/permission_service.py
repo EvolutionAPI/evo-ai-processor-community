@@ -96,6 +96,24 @@ class PermissionService:
                 return True
         return False
 
+    @classmethod
+    def is_agent_bot_permission_allowed(
+        cls, user_context: Optional[dict], path: str, permission_key: str
+    ) -> bool:
+        """Shared agent-bot confinement decision, usable outside the HTTP RBAC
+        gate (e.g. WebSocket handshakes that never reach validate_permission).
+
+        Regular (non-bot) contexts are unaffected and always return True. An
+        agent-bot key is allowed only when the path targets its OWN agent and
+        the permission is a runtime action. Fail closed on everything else.
+        """
+        if not user_context or not user_context.get("is_agent_bot"):
+            return True
+        bot_agent_id = str(user_context.get("agent_id") or "")
+        if not bot_agent_id or not cls._path_scoped_to_agent(path, bot_agent_id):
+            return False
+        return permission_key in cls._BOT_RUNTIME_PERMISSIONS
+
     async def validate_permission(self, request: Request, resource: str, action: str) -> None:
         # Build permission key
         permission_key = f"{resource}.{action}"
