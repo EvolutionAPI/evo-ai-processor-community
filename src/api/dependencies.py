@@ -94,7 +94,14 @@ async def verify_agent_access(
                     f"via shared folder {agent.folder_id}"
                 )
                 return True, True
+        except HTTPException:
+            # An explicit denial from the share service must fail closed: it
+            # must not be swallowed and downgraded into a silent grant.
+            raise
         except Exception as e:
+            # Transient infra errors do not revoke the single-tenant pool
+            # access every authenticated user already has; only the shared
+            # upgrade is withheld.
             logger.warning(f"Folder share lookup failed for agent {agent.id}: {e}")
 
     return True, False

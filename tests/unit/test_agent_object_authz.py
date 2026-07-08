@@ -86,6 +86,19 @@ class TestVerifyAgentAccess:
         assert has_access is True
         assert is_shared is False
 
+    def test_folder_share_explicit_denial_fails_closed(self):
+        # An explicit HTTPException from the share service must propagate as a
+        # denial, not be swallowed into a silent grant.
+        context = {"is_agent_bot": False, "email": "user@example.com"}
+        agent = make_agent(folder_id="33333333-3333-3333-3333-333333333333")
+        with patch(
+            "src.api.dependencies.folder_share_service.check_folder_access",
+            side_effect=HTTPException(status_code=403, detail="denied"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                run(verify_agent_access(MagicMock(), agent, "read", context))
+        assert exc.value.status_code == 403
+
 
 class TestAgentBotPermissionScope:
     def make_service(self):
@@ -111,12 +124,45 @@ class TestAgentBotPermissionScope:
             f"/api/v1/agents/{OTHER_AGENT_ID}/integrations/github/status", AGENT_ID
         )
 
-    def test_bot_bypasses_rbac_only_on_its_own_agent_path(self):
+    def test_path_scoped_rejects_mid_token_substring(self):
+        # The agent id embedded inside a larger token must not be treated as
+        # scope (canonical segment extraction, not substring matching).
+        assert not PermissionService._path_scoped_to_agent(
+            f"/api/v1/sessions/sync/prefix_{AGENT_ID}_suffix", AGENT_ID
+        )
+        assert not PermissionService._path_scoped_to_agent(
+            f"/api/v1/agents/x{AGENT_ID}x/status", AGENT_ID
+        )
+        assert not PermissionService._path_scoped_to_agent("/api/v1/agents//status", "")
+
+    def test_bot_bypasses_rbac_for_runtime_action_on_its_own_agent(self):
+        service = self.make_service()
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID, "token_info": {}}
+
+        request = self.make_request(f"/api/v1/a2a/{AGENT_ID}", context)
+        assert run(service.validate_permission(request, "ai_a2a_protocol", "execute")) is None
+
+    def test_bot_denied_credential_read_on_its_own_agent(self):
+        # Reading integration config exposes OAuth credentials; a runtime bot
+        # key must not reach it even on its own agent.
         service = self.make_service()
         context = {"is_agent_bot": True, "agent_id": AGENT_ID, "token_info": {}}
 
         request = self.make_request(f"/api/v1/agents/{AGENT_ID}/integrations/github/status", context)
-        assert run(service.validate_permission(request, "integrations", "read")) is None
+        with pytest.raises(HTTPException) as exc:
+            run(service.validate_permission(request, "integrations", "read"))
+        assert exc.value.status_code == 403
+
+    def test_bot_denied_management_action_on_its_own_agent(self):
+        # Disconnecting an integration writes/destroys credentials — a
+        # management action outside the runtime allowlist.
+        service = self.make_service()
+        context = {"is_agent_bot": True, "agent_id": AGENT_ID, "token_info": {}}
+
+        request = self.make_request(f"/api/v1/agents/{AGENT_ID}/integrations/github", context)
+        with pytest.raises(HTTPException) as exc:
+            run(service.validate_permission(request, "integrations", "disconnect"))
+        assert exc.value.status_code == 403
 
     def test_bot_is_denied_rbac_bypass_on_unscoped_path(self):
         service = self.make_service()
@@ -127,15 +173,24 @@ class TestAgentBotPermissionScope:
             run(service.validate_permission(request, "ai_clients", "usage"))
         assert exc.value.status_code == 403
 
-    def test_bot_is_denied_rbac_bypass_on_another_agents_path(self):
+    def test_bot_is_denied_any_action_on_another_agents_integration_route(self):
+        # P1 confinement on an integration router: a bot key for agent A cannot
+        # act on agent B, for a runtime action or a management action.
         service = self.make_service()
         context = {"is_agent_bot": True, "agent_id": AGENT_ID, "token_info": {}}
 
-        request = self.make_request(
+        read_request = self.make_request(
             f"/api/v1/agents/{OTHER_AGENT_ID}/integrations/github/status", context
         )
         with pytest.raises(HTTPException) as exc:
-            run(service.validate_permission(request, "integrations", "read"))
+            run(service.validate_permission(read_request, "integrations", "read"))
+        assert exc.value.status_code == 403
+
+        disconnect_request = self.make_request(
+            f"/api/v1/agents/{OTHER_AGENT_ID}/integrations/github", context
+        )
+        with pytest.raises(HTTPException) as exc:
+            run(service.validate_permission(disconnect_request, "integrations", "disconnect"))
         assert exc.value.status_code == 403
 
 
