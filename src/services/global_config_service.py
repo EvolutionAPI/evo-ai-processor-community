@@ -18,7 +18,7 @@ class GlobalConfigService:
 
     def __init__(self):
         """Initialize global config service."""
-        self.crm_base_url = os.getenv("EVOLUTION_BASE_URL", "http://localhost:3000")
+        self.crm_base_url = os.getenv("EVO_AI_CRM_URL") or os.getenv("EVOLUTION_BASE_URL", "http://localhost:3000")
         self.api_token = os.getenv("EVOAI_CRM_API_TOKEN")
         self._config_cache: Optional[Dict[str, Any]] = None
 
