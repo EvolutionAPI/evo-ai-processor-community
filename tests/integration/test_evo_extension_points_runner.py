@@ -10,6 +10,8 @@ together. Treat as regression guard, not as runner end-to-end coverage.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 
 from src import evo_extension_points
@@ -95,6 +97,10 @@ class TestRuntimeContextOverride:
 
             def with_context(self, context_id, fn):
                 return fn()
+
+            @asynccontextmanager
+            async def bind_context(self, context_id):
+                yield
 
         evo_extension_points.replace("runtime_context", IdFromMetadata())
         result = _mirror_runner_hooks(

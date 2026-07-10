@@ -7,6 +7,8 @@ per-EP VERSION constants and the absence of an aggregate version.
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 import pytest
 
 from src import evo_extension_points
@@ -153,6 +155,10 @@ class TestRuntimeContext:
 
             def with_context(self, context_id, fn):
                 return f"{context_id}:{fn()}"
+
+            @asynccontextmanager
+            async def bind_context(self, context_id):
+                yield
 
         evo_extension_points.replace("runtime_context", Custom())
         assert (
