@@ -57,7 +57,12 @@ router = APIRouter(
 )
 async def create_discover_tools(
     discover_tools: CustomMCPDiscoverToolsCreate,
-    permission: None = Depends(RequirePermission("ai_custom_mcp_servers", "discover")),
+    # discover-tools enumera as tools de um servidor MCP = uma LEITURA. Usa a action
+    # "read" (que existe no catálogo do auth e é grantada a quem tem create/list),
+    # não "discover" — essa action NÃO existe em resource_actions_config → 403 pra
+    # todos. Os endpoints-irmãos de discover (canva/asana) nem têm gate; este era o
+    # único, com uma action fantasma. Coerência: read.
+    permission: None = Depends(RequirePermission("ai_custom_mcp_servers", "read")),
     _: dict = Depends(get_current_user),
 ):
     """Discover tools from a custom MCP server"""

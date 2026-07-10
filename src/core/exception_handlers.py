@@ -77,6 +77,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         error_details = exc.detail.get("details")
     
     return error_response(
+        request,
         code=error_code,
         message=error_message,
         details=error_details,
@@ -104,6 +105,7 @@ async def base_api_exception_handler(request: Request, exc: BaseAPIException) ->
     error_details = exc.detail.get("details") if isinstance(exc.detail, dict) else None
     
     return error_response(
+        request,
         code=error_code,
         message=error_message,
         details=error_details,
