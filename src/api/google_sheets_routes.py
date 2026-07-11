@@ -112,7 +112,12 @@ async def get_google_sheets_service(
 
     # Fetch credentials from global config
     config_service = get_global_config_service()
-    credentials = await config_service.get_google_sheets_credentials()
+    # Thread the request's tenant (enterprise) into the credential fetch so the
+    # CRM resolves the per-tenant BYO credential. None under community/standalone
+    # (runtime_context default) → the header is omitted and the call is a no-op.
+    from src.evo_extension_points import runtime_context
+    cid = runtime_context.current_context_id(request)
+    credentials = await config_service.get_google_sheets_credentials(tenant_id=cid)
 
     client_id = credentials.get("client_id")
     client_secret = credentials.get("client_secret")
