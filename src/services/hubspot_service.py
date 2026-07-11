@@ -31,7 +31,8 @@ class HubSpotService(MCPOAuthService):
         redirect_uri: str,
         core_service_url: str,
         user_token: str,
-        mcp_url: Optional[str] = None
+        mcp_url: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ):
         """
         Initialize HubSpot MCP service.
@@ -43,6 +44,8 @@ class HubSpotService(MCPOAuthService):
             core_service_url: Base URL for evo-ai-core-service API
             user_token: User authentication token for API calls
             mcp_url: Optional custom MCP URL (defaults to HubSpot MCP)
+            tenant_id: Tenant id forwarded to core-service (enterprise) as
+                X-Evo-Tenant-Id on internal integration calls.
         """
         effective_mcp_url = mcp_url or self.DEFAULT_MCP_URL
 
@@ -61,7 +64,8 @@ class HubSpotService(MCPOAuthService):
             user_token=user_token,
             provider_name="hubspot",
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            tenant_id=tenant_id
         )
 
         logger.info(

@@ -67,8 +67,8 @@ class MetaInfoPagination(MetaInfo):
 class MetaInfoError(BaseModel):
     """Metadata information for error responses"""
     timestamp: str = Field(..., description="ISO8601 timestamp")
-    path: str = Field(..., description="Path of the request")
-    method: str = Field(..., description="HTTP method of the request")
+    path: Optional[str] = Field(None, description="Path of the request")
+    method: Optional[str] = Field(None, description="HTTP method of the request")
 
 
 class ErrorInfo(BaseModel):
@@ -160,9 +160,9 @@ def map_status_to_error_code(status_code: int) -> str:
 
 
 def error_response(
-    request: Request,
-    code: str,
-    message: str,
+    request: Optional[Request] = None,
+    code: str = "ERROR",
+    message: str = "Error",
     details: Optional[Any] = None,
     status_code: int = 400
 ) -> JSONResponse:
@@ -191,8 +191,8 @@ def error_response(
         error=error_info,
         meta=MetaInfoError(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            path=str(request.url.path),
-            method=request.method
+            path=str(request.url.path) if request else None,
+            method=request.method if request else None
         )
     )
         

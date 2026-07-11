@@ -26,6 +26,7 @@ from src.schemas.response_models import (
 )
 
 from src.api.dependencies import get_current_user
+from src.api.oauth_redirect import derive_redirect_uri
 from src.middleware.permissions import RequirePermission
 
 logger = logging.getLogger(__name__)
@@ -166,7 +167,7 @@ async def get_google_calendar_service(
 
     client_id = credentials.get("client_id")
     client_secret = credentials.get("client_secret")
-    redirect_uri = credentials.get("redirect_uri")
+    redirect_uri = credentials.get("redirect_uri") or derive_redirect_uri(request, "google_calendar")
 
     if not client_id or not client_secret or not redirect_uri:
         raise HTTPException(

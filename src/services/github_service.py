@@ -22,7 +22,8 @@ class GitHubService(MCPOAuthService):
         redirect_uri: str,
         core_service_url: str,
         user_token: str,
-        mcp_url: Optional[str] = None
+        mcp_url: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ):
         """
         Initialize GitHub MCP service.
@@ -33,6 +34,8 @@ class GitHubService(MCPOAuthService):
             core_service_url: Base URL for evo-ai-core-service API
             user_token: User authentication token for API calls
             mcp_url: Optional custom MCP URL (defaults to GitHub Copilot MCP)
+            tenant_id: Tenant id forwarded to core-service (enterprise) as
+                X-Evo-Tenant-Id on internal integration calls.
         """
         effective_mcp_url = mcp_url or self.DEFAULT_MCP_URL
         super().__init__(
@@ -42,7 +45,8 @@ class GitHubService(MCPOAuthService):
             user_token=user_token,
             provider_name="github",
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            tenant_id=tenant_id
         )
         logger.info(f"GitHubService initialized with MCP URL: {effective_mcp_url}")
     async def complete_authorization(

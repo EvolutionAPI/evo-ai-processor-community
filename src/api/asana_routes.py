@@ -27,6 +27,7 @@ from src.schemas.response_models import (
 )
 
 from src.api.dependencies import get_current_user
+from src.api.oauth_redirect import derive_redirect_uri
 from src.middleware.permissions import RequirePermission
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ async def get_asana_service(
 
     client_id = credentials.get("client_id")  # Optional - can be obtained via dynamic registration
     client_secret = credentials.get("client_secret")  # Optional - can be obtained via dynamic registration
-    redirect_uri = credentials.get("redirect_uri")
+    redirect_uri = credentials.get("redirect_uri") or derive_redirect_uri(request, "asana")
 
     # Only redirect_uri is required - client_id and client_secret can be obtained via dynamic registration (RFC 7591)
     if not redirect_uri:
@@ -109,7 +110,8 @@ async def get_asana_service(
         core_service_url=core_service_url,
         user_token=user_token,
         client_id=client_id,  # Optional
-        client_secret=client_secret  # Optional
+        client_secret=client_secret,  # Optional
+        tenant_id=cid
     )
 
 async def get_asana_service_optional(

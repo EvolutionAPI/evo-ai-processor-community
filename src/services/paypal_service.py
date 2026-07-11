@@ -48,7 +48,8 @@ class PayPalService(MCPOAuthService):
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
         mcp_url: Optional[str] = None,
-        environment: Optional[str] = None
+        environment: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ):
         """
         Initialize PayPal MCP service.
@@ -60,8 +61,10 @@ class PayPalService(MCPOAuthService):
             client_id: PayPal OAuth client ID
             client_secret: PayPal OAuth client secret
             mcp_url: Optional custom MCP URL (defaults to PayPal MCP)
-            environment: Optional environment ("sandbox" or "production"), 
+            environment: Optional environment ("sandbox" or "production"),
                         defaults to detecting from mcp_url
+            tenant_id: Tenant id forwarded to core-service (enterprise) as
+                X-Evo-Tenant-Id on internal integration calls.
         """
         # Detect environment from MCP URL if not provided
         if environment is None:
@@ -99,7 +102,8 @@ class PayPalService(MCPOAuthService):
             user_token=user_token,
             provider_name="paypal",
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            tenant_id=tenant_id
         )
 
         logger.info(

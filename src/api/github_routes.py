@@ -27,6 +27,7 @@ from src.schemas.response_models import (
 )
 
 from src.api.dependencies import get_current_user
+from src.api.oauth_redirect import derive_redirect_uri
 from src.middleware.permissions import RequirePermission
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,9 @@ async def get_github_service(
 
     client_id = credentials.get("client_id")
     client_secret = credentials.get("client_secret")
-    redirect_uri = credentials.get("redirect_uri")
+    # redirect_uri is derived automatically from the browser request origin when
+    # not configured — the callback route is fixed, only the host changes.
+    redirect_uri = credentials.get("redirect_uri") or derive_redirect_uri(request, "github")
 
     if not client_id or not client_secret or not redirect_uri:
         raise HTTPException(
@@ -106,7 +109,8 @@ async def get_github_service(
         client_secret=client_secret,
         redirect_uri=redirect_uri,
         core_service_url=core_service_url,
-        user_token=user_token
+        user_token=user_token,
+        tenant_id=cid
     )
 
 
@@ -271,7 +275,7 @@ async def get_configuration(
     """Get GitHub integration configuration."""
     from src.api.mcp_integration_base import get_configuration_endpoint
 
-    async def load_from_service(ag_id: str, request: Request):
+    async def load_from_service(ag_id: str):
         if service and hasattr(service, '_load_credentials'):
             return await service._load_credentials(ag_id)
         return None

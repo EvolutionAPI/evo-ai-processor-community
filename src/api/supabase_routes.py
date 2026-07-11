@@ -77,6 +77,11 @@ async def get_supabase_service(
 
     # Fetch credentials from global config
     config_service = get_global_config_service()
+    # Thread the request's tenant (enterprise) into the credential fetch so the
+    # CRM resolves the per-tenant BYO credential. None under community/standalone
+    # (runtime_context default) → the header is omitted and the call is a no-op.
+    from src.evo_extension_points import runtime_context
+    cid = runtime_context.current_context_id(request)
     credentials = await config_service.get_supabase_credentials()
 
     redirect_uri = credentials.get("redirect_uri")
@@ -112,7 +117,8 @@ async def get_supabase_service(
         redirect_uri=redirect_uri,
         core_service_url=core_service_url,
         user_token=user_token,
-        mcp_url=mcp_url
+        mcp_url=mcp_url,
+        tenant_id=cid
     )
 
 
