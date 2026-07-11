@@ -22,7 +22,8 @@ class AtlassianService(MCPOAuthService):
         user_token: str,
         client_id: Optional[str] = None,
         client_secret: Optional[str] = None,
-        mcp_url: Optional[str] = None
+        mcp_url: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ):
         """
         Initialize Atlassian MCP service.
@@ -33,6 +34,8 @@ class AtlassianService(MCPOAuthService):
             client_id: Atlassian OAuth client ID (optional, can be obtained via dynamic registration)
             client_secret: Atlassian OAuth client secret (optional, can be obtained via dynamic registration)
             mcp_url: Optional custom MCP URL (defaults to Atlassian MCP)
+            tenant_id: Tenant id forwarded to core-service (enterprise) as
+                X-Evo-Tenant-Id on internal integration calls.
         """
         effective_mcp_url = mcp_url or self.DEFAULT_MCP_URL
         super().__init__(
@@ -42,7 +45,8 @@ class AtlassianService(MCPOAuthService):
             user_token=user_token,
             provider_name="atlassian",
             client_id=client_id,
-            client_secret=client_secret
+            client_secret=client_secret,
+            tenant_id=tenant_id
         )
         logger.info(f"AtlassianService initialized with MCP URL: {effective_mcp_url}")
     async def complete_authorization(

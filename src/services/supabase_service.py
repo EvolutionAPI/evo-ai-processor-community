@@ -22,7 +22,8 @@ class SupabaseService(MCPOAuthService):
         core_service_url: str,
         user_token: str,
         authorization_url: Optional[str] = None,
-        mcp_url: Optional[str] = None
+        mcp_url: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ):
         """
         Initialize Supabase MCP service.
@@ -32,6 +33,8 @@ class SupabaseService(MCPOAuthService):
             user_token: User authentication token for API calls
             authorization_url: Supabase OAuth authorization URL (optional)
             mcp_url: Optional custom MCP URL (defaults to Supabase MCP)
+            tenant_id: Tenant id forwarded to core-service (enterprise) as
+                X-Evo-Tenant-Id on internal integration calls.
         """
         effective_mcp_url = mcp_url or self.DEFAULT_MCP_URL
         super().__init__(
@@ -41,7 +44,8 @@ class SupabaseService(MCPOAuthService):
             user_token=user_token,
             provider_name="supabase",
             client_id=None,  # Supabase doesn't require client_id
-            client_secret=None  # Supabase doesn't require client_secret
+            client_secret=None,  # Supabase doesn't require client_secret
+            tenant_id=tenant_id
         )
         self.authorization_url = authorization_url or "https://api.supabase.com/v1/oauth/authorize"
         logger.info(f"SupabaseService initialized with MCP URL: {effective_mcp_url}")

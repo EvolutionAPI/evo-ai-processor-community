@@ -37,7 +37,8 @@ class MCPOAuthService:
         user_token: str,
         provider_name: str,
         client_id: Optional[str] = None,
-        client_secret: Optional[str] = None
+        client_secret: Optional[str] = None,
+        tenant_id: Optional[str] = None
     ):
         """
         Initialize MCP OAuth service.
@@ -50,6 +51,10 @@ class MCPOAuthService:
             provider_name: Provider name for integration storage (e.g., "notion", "github")
             client_id: OAuth client ID (optional, can be obtained via dynamic registration)
             client_secret: OAuth client secret (optional, can be obtained via dynamic registration)
+            tenant_id: Tenant id to forward to core-service (enterprise). When present,
+                sent as X-Evo-Tenant-Id so the tenant middleware resolves the correct
+                tenant on internal calls (integration read/store). None under
+                community/standalone → header omitted, no-op.
         """
         self.mcp_url = mcp_url.rstrip('/')
         self.provider_name = provider_name
@@ -58,8 +63,16 @@ class MCPOAuthService:
         self.redirect_uri = redirect_uri
         self.core_service_url = core_service_url.rstrip('/')
         self.user_token = user_token
+        self.tenant_id = tenant_id
+        # The browser reaches core-service through the CRM, which supplies
+        # X-Evo-Tenant-Id; the processor's internal calls must carry the same
+        # header or the enterprise tenant middleware rejects them (403 forbidden,
+        # fail-closed on empty tenant). Attach it only when a tenant is bound.
+        client_headers = {"Authorization": f"Bearer {user_token}"}
+        if tenant_id:
+            client_headers["X-Evo-Tenant-Id"] = tenant_id
         self.http_client = httpx.AsyncClient(
-            headers={"Authorization": f"Bearer {user_token}"},
+            headers=client_headers,
             timeout=30.0
         )
 
