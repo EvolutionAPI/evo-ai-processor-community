@@ -31,7 +31,7 @@ def create_read_spreadsheet_tool(
     client = GoogleSheetsClient(db=db)
 
     async def read_spreadsheet(
-        spreadsheet_id: str,
+        spreadsheet_id: str = "",
         range_name: str = 'A1:Z1000',
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
@@ -53,7 +53,7 @@ def create_read_spreadsheet_tool(
         - The actual range that was read
 
         Args:
-            spreadsheet_id: The ID of the spreadsheet to read from (found in the URL)
+            spreadsheet_id: The ID of the spreadsheet to read from (found in the URL) Optional — when omitted, the spreadsheet selected in the integration settings is used.
             range_name: The range to read (e.g., 'Sheet1!A1:D10' or 'A1:Z1000')
             tool_context: Tool execution context
 
@@ -80,10 +80,16 @@ def create_read_spreadsheet_tool(
                     "message": "Google Sheets credentials not configured for this agent"
                 }
 
+            # Default to the spreadsheet selected in the integration config
+            # (settings.selectedSpreadsheetId) when the caller omits an explicit id,
+            # mirroring how Google Calendar defaults to the 'primary' calendar.
+            if not spreadsheet_id or not spreadsheet_id.strip():
+                spreadsheet_id = ((sheets_config or {}).get("settings") or {}).get("selectedSpreadsheetId", "") or ""
+
             if not spreadsheet_id or not spreadsheet_id.strip():
                 return {
                     "status": "error",
-                    "message": "Spreadsheet ID is required"
+                    "message": "No spreadsheet_id was provided and no spreadsheet is selected in the integration settings"
                 }
 
             # Read the spreadsheet
@@ -124,30 +130,32 @@ def create_read_spreadsheet_tool(
     # Set function metadata
     read_spreadsheet.__name__ = "read_spreadsheet"
 
-    read_spreadsheet.__doc__ = """Read data from a Google Sheets spreadsheet.
+    # Surface the agent's configured spreadsheet in the tool description so the
+    # model calls the tool WITHOUT asking the user for an id.
+    _settings = (sheets_config or {}).get("settings") or {}
+    _selected_id = _settings.get("selectedSpreadsheetId", "") or ""
+    _selected_name = next(
+        (sp.get("name", "") for sp in ((sheets_config or {}).get("spreadsheets") or [])
+         if sp.get("id") == _selected_id),
+        "",
+    )
+    _default_hint = (
+        f"\nThis agent has a default spreadsheet configured: '{_selected_name}' (id: {_selected_id}).\n"
+        "When the user refers to 'the spreadsheet', 'my spreadsheet' or the connected sheet "
+        "WITHOUT giving an id, call this tool WITHOUT the spreadsheet_id argument to use it. "
+        "Do NOT ask the user for a spreadsheet id unless they explicitly want a DIFFERENT spreadsheet.\n"
+    ) if _selected_id else ""
 
-Use this tool to retrieve data from spreadsheets. The spreadsheet must be already configured in the agent's Google Sheets integration.
-
+    read_spreadsheet.__doc__ = f"""Read data from a Google Sheets spreadsheet.
+{_default_hint}
 Args:
-    spreadsheet_id (str): The spreadsheet ID (found in the spreadsheet URL after /d/)
-    range_name (str, optional): The range to read in A1 notation (default: 'A1:Z1000')
-                                Examples: 'Sheet1!A1:D10', 'Data!A:E', 'A1:Z1000'
+    spreadsheet_id (str, optional): The spreadsheet ID (found in the URL after /d/).
+        Omit to use the agent's configured spreadsheet.
+    range_name (str, optional): The range to read in A1 notation (default: 'A1:Z1000').
+        Examples: 'Sheet1!A1:D10', 'Data!A:E', 'A1:Z1000'.
 
 Returns:
-    Dictionary containing:
-    - values: 2D array of cell values
-    - range: The actual range that was read
-    - row_count: Number of rows read
-    - column_count: Number of columns in first row
-
-Examples:
-- Read first 1000 rows: spreadsheet_id='abc123', range_name='A1:Z1000'
-- Read specific sheet: spreadsheet_id='abc123', range_name='Customers!A1:E100'
-- Read all columns: spreadsheet_id='abc123', range_name='Sheet1!A:Z'
-- Read specific range: spreadsheet_id='abc123', range_name='B2:D50'
-
-Note: The spreadsheet ID can be found in the URL:
-https://docs.google.com/spreadsheets/d/[SPREADSHEET_ID]/edit
+    Dictionary with values (2D array), range, row_count and column_count.
 """
 
     return FunctionTool(func=read_spreadsheet)

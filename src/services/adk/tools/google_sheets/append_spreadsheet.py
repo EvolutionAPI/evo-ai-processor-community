@@ -31,9 +31,9 @@ def create_append_spreadsheet_tool(
     client = GoogleSheetsClient(db=db)
 
     async def append_spreadsheet(
-        spreadsheet_id: str,
         range_name: str,
         values: List[List[Any]],
+        spreadsheet_id: str = "",
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
         """
@@ -55,7 +55,7 @@ def create_append_spreadsheet_tool(
         - Return the range where data was added
 
         Args:
-            spreadsheet_id: The ID of the spreadsheet to append to (found in the URL)
+            spreadsheet_id: The ID of the spreadsheet to append to (found in the URL) Optional — when omitted, the spreadsheet selected in the integration settings is used.
             range_name: The range to append to (e.g., 'Sheet1!A1' or 'Data!A:E')
             values: 2D array of values to append [[row1], [row2], ...]
             tool_context: Tool execution context
@@ -83,10 +83,15 @@ def create_append_spreadsheet_tool(
                     "message": "Google Sheets credentials not configured for this agent"
                 }
 
+            # Default to the spreadsheet selected in the integration config
+            # (settings.selectedSpreadsheetId) when the caller omits an explicit id.
+            if not spreadsheet_id or not spreadsheet_id.strip():
+                spreadsheet_id = ((sheets_config or {}).get("settings") or {}).get("selectedSpreadsheetId", "") or ""
+
             if not spreadsheet_id or not spreadsheet_id.strip():
                 return {
                     "status": "error",
-                    "message": "Spreadsheet ID is required"
+                    "message": "No spreadsheet_id was provided and no spreadsheet is selected in the integration settings"
                 }
 
             if not range_name or not range_name.strip():
@@ -147,34 +152,32 @@ def create_append_spreadsheet_tool(
     # Set function metadata
     append_spreadsheet.__name__ = "append_spreadsheet"
 
-    append_spreadsheet.__doc__ = """Append data to a Google Sheets spreadsheet without replacing existing content.
+    _settings = (sheets_config or {}).get("settings") or {}
+    _selected_id = _settings.get("selectedSpreadsheetId", "") or ""
+    _selected_name = next(
+        (sp.get("name", "") for sp in ((sheets_config or {}).get("spreadsheets") or [])
+         if sp.get("id") == _selected_id),
+        "",
+    )
+    _default_hint = (
+        f"\nThis agent has a default spreadsheet configured: '{_selected_name}' (id: {_selected_id}).\n"
+        "When the user refers to 'the spreadsheet', 'my spreadsheet' or the connected sheet "
+        "WITHOUT giving an id, call this tool WITHOUT the spreadsheet_id argument to use it. "
+        "Do NOT ask the user for a spreadsheet id unless they explicitly want a DIFFERENT spreadsheet.\n"
+    ) if _selected_id else ""
 
-Use this tool to add new rows to a spreadsheet. The data will be added after the last row that
-contains data, preserving all existing content.
-
+    append_spreadsheet.__doc__ = f"""Append data to a Google Sheets spreadsheet without replacing existing content.
+{_default_hint}
 Args:
-    spreadsheet_id (str): The spreadsheet ID (found in the spreadsheet URL after /d/)
-    range_name (str): The range to append to (usually just the sheet name or starting column)
-                     Examples: 'Sheet1!A:E', 'Data!A1', 'Logs!A:Z'
-    values (list): 2D array of values to append, e.g., [['John', 'john@example.com'], ['Jane', 'jane@example.com']]
+    spreadsheet_id (str, optional): The spreadsheet ID (found in the URL after /d/).
+        Omit to use the agent's configured spreadsheet.
+    range_name (str): The range to append to (usually the sheet name or starting column, e.g., 'Sheet1!A:E').
+    values (list): 2D array of values to append, e.g., [['John', 'john@example.com'], ['Jane', 'jane@example.com']].
 
 Returns:
-    Dictionary containing:
-    - message: Success message
-    - updated_cells: Number of cells added
-    - updated_range: The actual range where data was appended
-    - updated_rows: Number of rows added
-    - updated_columns: Number of columns added
+    Dictionary with updated_cells, updated_range, updated_rows and updated_columns.
 
-Examples:
-- Add new customer: spreadsheet_id='abc123', range_name='Customers!A:C',
-                   values=[['John Doe', 'john@example.com', '555-0100']]
-- Log event: spreadsheet_id='abc123', range_name='Logs!A1',
-            values=[['2024-01-15', 'User login', 'john@example.com']]
-- Add multiple records: spreadsheet_id='abc123', range_name='Sheet1!A:E',
-                       values=[['Alice', 25, 'NY'], ['Bob', 30, 'CA']]
-
-Note: This will NOT replace existing content. To update existing data, use write_spreadsheet instead.
+Note: This does NOT replace existing content. To update existing data, use write_spreadsheet.
 """
 
     return FunctionTool(func=append_spreadsheet)
