@@ -151,32 +151,32 @@ def create_write_spreadsheet_tool(
     # Set function metadata
     write_spreadsheet.__name__ = "write_spreadsheet"
 
-    write_spreadsheet.__doc__ = """Write data to a Google Sheets spreadsheet, replacing existing content.
+    _settings = (sheets_config or {}).get("settings") or {}
+    _selected_id = _settings.get("selectedSpreadsheetId", "") or ""
+    _selected_name = next(
+        (sp.get("name", "") for sp in ((sheets_config or {}).get("spreadsheets") or [])
+         if sp.get("id") == _selected_id),
+        "",
+    )
+    _default_hint = (
+        f"\nThis agent has a default spreadsheet configured: '{_selected_name}' (id: {_selected_id}).\n"
+        "When the user refers to 'the spreadsheet', 'my spreadsheet' or the connected sheet "
+        "WITHOUT giving an id, call this tool WITHOUT the spreadsheet_id argument to use it. "
+        "Do NOT ask the user for a spreadsheet id unless they explicitly want a DIFFERENT spreadsheet.\n"
+    ) if _selected_id else ""
 
-Use this tool to update or replace data in a spreadsheet. This will overwrite any existing content
-in the specified range.
-
+    write_spreadsheet.__doc__ = f"""Write data to a Google Sheets spreadsheet, replacing existing content.
+{_default_hint}
 Args:
-    spreadsheet_id (str): The spreadsheet ID (found in the spreadsheet URL after /d/)
-    range_name (str): The starting cell or range where data should be written
-                     Examples: 'Sheet1!A1', 'Data!B2', 'Sheet1!A1:D10'
-    values (list): 2D array of values to write, e.g., [['Name', 'Email'], ['John', 'john@example.com']]
+    spreadsheet_id (str, optional): The spreadsheet ID (found in the URL after /d/).
+        Omit to use the agent's configured spreadsheet.
+    range_name (str): The starting cell or range where data should be written (e.g., 'Sheet1!A1').
+    values (list): 2D array of values to write, e.g., [['Name', 'Email'], ['John', 'john@example.com']].
 
 Returns:
-    Dictionary containing:
-    - message: Success message
-    - updated_cells: Number of cells updated
-    - updated_range: The actual range that was updated
-    - updated_rows: Number of rows updated
-    - updated_columns: Number of columns updated
+    Dictionary with updated_cells, updated_range, updated_rows and updated_columns.
 
-Examples:
-- Write headers: spreadsheet_id='abc123', range_name='Sheet1!A1', values=[['Name', 'Email', 'Phone']]
-- Update data: spreadsheet_id='abc123', range_name='A2', values=[['John', 'john@example.com', '555-0100']]
-- Write table: spreadsheet_id='abc123', range_name='Data!A1',
-               values=[['Name', 'Age'], ['Alice', 25], ['Bob', 30]]
-
-Note: This will REPLACE existing content. To add rows without replacing, use append_spreadsheet instead.
+Note: This REPLACES existing content in the range. To add rows without replacing, use append_spreadsheet.
 """
 
     return FunctionTool(func=write_spreadsheet)
