@@ -116,7 +116,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("google_calendar_client_id")
                     client_secret = data.get("google_calendar_client_secret")
                     redirect_uri = data.get("google_calendar_redirect_uri")
@@ -184,7 +184,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("google_sheets_client_id")
                     client_secret = data.get("google_sheets_client_secret")
                     redirect_uri = data.get("google_sheets_redirect_uri")
@@ -252,7 +252,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("github_client_id")
                     client_secret = data.get("github_client_secret")
                     redirect_uri = data.get("github_redirect_uri")
@@ -320,7 +320,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("notion_client_id")
                     client_secret = data.get("notion_client_secret")
                     redirect_uri = data.get("notion_redirect_uri")
@@ -388,7 +388,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("stripe_client_id")
                     client_secret = data.get("stripe_client_secret")
                     redirect_uri = data.get("stripe_redirect_uri")
@@ -451,7 +451,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("monday_client_id")
                     client_secret = data.get("monday_client_secret")
                     redirect_uri = data.get("monday_redirect_uri")
@@ -512,7 +512,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("atlassian_client_id")
                     client_secret = data.get("atlassian_client_secret")
                     redirect_uri = data.get("atlassian_redirect_uri")
@@ -573,7 +573,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("asana_client_id")
                     client_secret = data.get("asana_client_secret")
                     redirect_uri = data.get("asana_redirect_uri")
@@ -634,7 +634,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("hubspot_client_id")
                     client_secret = data.get("hubspot_client_secret")
                     redirect_uri = data.get("hubspot_redirect_uri")
@@ -716,7 +716,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("linear_client_id")
                     client_secret = data.get("linear_client_secret")
                     redirect_uri = data.get("linear_redirect_uri")
@@ -777,7 +777,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("paypal_client_id")
                     client_secret = data.get("paypal_client_secret")
                     redirect_uri = data.get("paypal_redirect_uri")
@@ -842,7 +842,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     client_id = data.get("canva_client_id")
                     client_secret = data.get("canva_client_secret")
                     redirect_uri = data.get("canva_redirect_uri")
@@ -905,7 +905,7 @@ class GlobalConfigService:
                 response = await client.get(url, headers=headers)
 
                 if response.status_code == 200:
-                    data = response.json()
+                    data = response.json().get("data", {})
                     redirect_uri = data.get("supabase_redirect_uri")
 
                     logger.info(
