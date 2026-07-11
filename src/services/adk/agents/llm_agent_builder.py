@@ -623,7 +623,8 @@ class LlmAgentBuilder:
         # Get timezone from agent config
         timezone_str = agent.config.get("timezone")
         now = get_datetime_in_timezone(timezone_str)
-        current_datetime = now.strftime("%d/%m/%Y %H:%M")
+        # ISO 8601 (YYYY-MM-DD) so the LLM never confuses day/month order.
+        current_datetime = now.strftime("%Y-%m-%d %H:%M")
         current_day_of_week = now.strftime("%A")
         current_date_iso = now.strftime("%Y-%m-%d")
         current_time = now.strftime("%H:%M")
@@ -1014,7 +1015,8 @@ class LlmAgentBuilder:
                 try:
                     from datetime import datetime
                     dt = datetime.fromisoformat(current_datetime.replace('Z', '+00:00'))
-                    formatted_datetime = dt.strftime("%d/%m/%Y %H:%M")
+                    # ISO 8601 + weekday so the LLM never confuses day/month order.
+                    formatted_datetime = dt.strftime("%Y-%m-%d %H:%M (%A)")
                 except:
                     formatted_datetime = current_datetime
             else:
