@@ -31,7 +31,7 @@ def create_read_spreadsheet_tool(
     client = GoogleSheetsClient(db=db)
 
     async def read_spreadsheet(
-        spreadsheet_id: str,
+        spreadsheet_id: str = "",
         range_name: str = 'A1:Z1000',
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
@@ -53,7 +53,7 @@ def create_read_spreadsheet_tool(
         - The actual range that was read
 
         Args:
-            spreadsheet_id: The ID of the spreadsheet to read from (found in the URL)
+            spreadsheet_id: The ID of the spreadsheet to read from (found in the URL) Optional — when omitted, the spreadsheet selected in the integration settings is used.
             range_name: The range to read (e.g., 'Sheet1!A1:D10' or 'A1:Z1000')
             tool_context: Tool execution context
 
@@ -80,10 +80,16 @@ def create_read_spreadsheet_tool(
                     "message": "Google Sheets credentials not configured for this agent"
                 }
 
+            # Default to the spreadsheet selected in the integration config
+            # (settings.selectedSpreadsheetId) when the caller omits an explicit id,
+            # mirroring how Google Calendar defaults to the 'primary' calendar.
+            if not spreadsheet_id or not spreadsheet_id.strip():
+                spreadsheet_id = ((sheets_config or {}).get("settings") or {}).get("selectedSpreadsheetId", "") or ""
+
             if not spreadsheet_id or not spreadsheet_id.strip():
                 return {
                     "status": "error",
-                    "message": "Spreadsheet ID is required"
+                    "message": "No spreadsheet_id was provided and no spreadsheet is selected in the integration settings"
                 }
 
             # Read the spreadsheet

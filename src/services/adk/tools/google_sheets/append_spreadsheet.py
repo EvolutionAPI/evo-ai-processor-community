@@ -31,9 +31,9 @@ def create_append_spreadsheet_tool(
     client = GoogleSheetsClient(db=db)
 
     async def append_spreadsheet(
-        spreadsheet_id: str,
         range_name: str,
         values: List[List[Any]],
+        spreadsheet_id: str = "",
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
         """
@@ -55,7 +55,7 @@ def create_append_spreadsheet_tool(
         - Return the range where data was added
 
         Args:
-            spreadsheet_id: The ID of the spreadsheet to append to (found in the URL)
+            spreadsheet_id: The ID of the spreadsheet to append to (found in the URL) Optional — when omitted, the spreadsheet selected in the integration settings is used.
             range_name: The range to append to (e.g., 'Sheet1!A1' or 'Data!A:E')
             values: 2D array of values to append [[row1], [row2], ...]
             tool_context: Tool execution context
@@ -83,10 +83,15 @@ def create_append_spreadsheet_tool(
                     "message": "Google Sheets credentials not configured for this agent"
                 }
 
+            # Default to the spreadsheet selected in the integration config
+            # (settings.selectedSpreadsheetId) when the caller omits an explicit id.
+            if not spreadsheet_id or not spreadsheet_id.strip():
+                spreadsheet_id = ((sheets_config or {}).get("settings") or {}).get("selectedSpreadsheetId", "") or ""
+
             if not spreadsheet_id or not spreadsheet_id.strip():
                 return {
                     "status": "error",
-                    "message": "Spreadsheet ID is required"
+                    "message": "No spreadsheet_id was provided and no spreadsheet is selected in the integration settings"
                 }
 
             if not range_name or not range_name.strip():

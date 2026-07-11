@@ -31,9 +31,9 @@ def create_write_spreadsheet_tool(
     client = GoogleSheetsClient(db=db)
 
     async def write_spreadsheet(
-        spreadsheet_id: str,
         range_name: str,
         values: List[List[Any]],
+        spreadsheet_id: str = "",
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
         """
@@ -54,7 +54,7 @@ def create_write_spreadsheet_tool(
         - Return the number of cells/rows/columns updated
 
         Args:
-            spreadsheet_id: The ID of the spreadsheet to write to (found in the URL)
+            spreadsheet_id: The ID of the spreadsheet to write to (found in the URL) Optional — when omitted, the spreadsheet selected in the integration settings is used.
             range_name: The starting range to write (e.g., 'Sheet1!A1' or 'Data!B2')
             values: 2D array of values to write [[row1], [row2], ...]
             tool_context: Tool execution context
@@ -82,10 +82,15 @@ def create_write_spreadsheet_tool(
                     "message": "Google Sheets credentials not configured for this agent"
                 }
 
+            # Default to the spreadsheet selected in the integration config
+            # (settings.selectedSpreadsheetId) when the caller omits an explicit id.
+            if not spreadsheet_id or not spreadsheet_id.strip():
+                spreadsheet_id = ((sheets_config or {}).get("settings") or {}).get("selectedSpreadsheetId", "") or ""
+
             if not spreadsheet_id or not spreadsheet_id.strip():
                 return {
                     "status": "error",
-                    "message": "Spreadsheet ID is required"
+                    "message": "No spreadsheet_id was provided and no spreadsheet is selected in the integration settings"
                 }
 
             if not range_name or not range_name.strip():
