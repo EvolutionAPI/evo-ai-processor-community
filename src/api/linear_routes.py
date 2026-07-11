@@ -77,7 +77,12 @@ async def get_linear_service_optional(
 
     # Fetch credentials from global config
     config_service = get_global_config_service()
-    credentials = await config_service.get_linear_credentials()
+    # Thread the request's tenant (enterprise) into the credential fetch so the
+    # CRM resolves the per-tenant BYO credential. None under community/standalone
+    # (runtime_context default) → the header is omitted and the call is a no-op.
+    from src.evo_extension_points import runtime_context
+    cid = runtime_context.current_context_id(request)
+    credentials = await config_service.get_linear_credentials(tenant_id=cid)
 
     client_id = credentials.get("client_id")  # Optional - can be obtained via dynamic registration
     client_secret = credentials.get("client_secret")  # Optional - can be obtained via dynamic registration
@@ -115,7 +120,12 @@ async def get_linear_service(
 
     # Fetch credentials from global config
     config_service = get_global_config_service()
-    credentials = await config_service.get_linear_credentials()
+    # Thread the request's tenant (enterprise) into the credential fetch so the
+    # CRM resolves the per-tenant BYO credential. None under community/standalone
+    # (runtime_context default) → the header is omitted and the call is a no-op.
+    from src.evo_extension_points import runtime_context
+    cid = runtime_context.current_context_id(request)
+    credentials = await config_service.get_linear_credentials(tenant_id=cid)
 
     client_id = credentials.get("client_id")  # Optional - can be obtained via dynamic registration
     client_secret = credentials.get("client_secret")  # Optional - can be obtained via dynamic registration
