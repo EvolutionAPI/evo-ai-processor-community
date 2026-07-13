@@ -28,7 +28,7 @@
 """
 
 from typing import Optional, Dict, Any, List
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 # ============================================================================
 # EvoAuth Schemas
@@ -78,8 +78,6 @@ class TokenInfo(BaseModel):
     api_access_token ones; both are accepted and normalized to `access_token`,
     which is what every consumer of token_info reads.
     """
-    model_config = ConfigDict(populate_by_name=True)
-
     access_token: str = Field(validation_alias=AliasChoices("access_token", "token"))
     type: str = "bearer"
 
