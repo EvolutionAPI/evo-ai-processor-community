@@ -91,11 +91,19 @@ async def get_jwt_token_ws(token: str, skip_validation: bool = False) -> Optiona
         try:
             from src.services.evo_auth_service import get_auth_service
             auth_service = get_auth_service()
-            # Try as bearer token first. validate_token JÁ retorna o EvoAuthResponse
-            # montado (com .user/.email); NÃO há um wrapper com `.data` — acessar `.data`
-            # aqui lançava 'EvoAuthResponse object has no attribute data', fechando o WS
-            # mesmo com o token VÁLIDO (agente nunca respondia).
-            auth_response = await auth_service.validate_token(token, "bearer")
+            # validate_token already returns the built EvoAuthResponse (with
+            # .user/.email); there is no `.data` wrapper to unwrap.
+            #
+            # evo-auth decides the token type from the header it arrives in, so the
+            # same value has to be offered under both shapes: a browser token only
+            # validates as `bearer`, an API token only as `api_access_token`. The
+            # handshake carries no type, hence the probe (EVO-2123).
+            auth_response = None
+            for token_type in ("bearer", "api_access_token"):
+                auth_response = await auth_service.validate_token(token, token_type)
+                if auth_response and auth_response.user:
+                    break
+
             if auth_response and auth_response.user:
                 # Return user context similar to what middleware does
                 user = auth_response.user.dict() if hasattr(auth_response.user, 'dict') else auth_response.user

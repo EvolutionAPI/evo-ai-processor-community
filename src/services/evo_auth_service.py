@@ -28,7 +28,9 @@
 """
 
 from typing import Optional, Dict, Any
-from pydantic import ValidationError
+# Aliased: this module defines its own ValidationError below, which would
+# otherwise shadow pydantic's and silently change what the except clauses catch.
+from pydantic import ValidationError as PydanticValidationError
 import httpx
 from src.utils.logger import setup_logger
 from src.config.settings import settings
@@ -36,6 +38,24 @@ from src.utils.http import HttpError
 from src.schemas.auth import EvoAuthResponse
 
 logger = setup_logger(__name__)
+
+
+def describe_payload_shape(payload: Any) -> str:
+    """Field names and types of a payload, never its values.
+
+    The validate payload embeds the token itself, so it must not reach the logs.
+    A field-name map is what a wire-shape drift (EVO-2123: `token` vs
+    `access_token`) actually needs to be diagnosed.
+    """
+    if isinstance(payload, dict):
+        return "{" + ", ".join(
+            f"{key}: {describe_payload_shape(value)}" for key, value in payload.items()
+        ) + "}"
+    if isinstance(payload, list):
+        inner = describe_payload_shape(payload[0]) if payload else "?"
+        return f"[{inner}]"
+    return type(payload).__name__
+
 
 class AuthenticationError(Exception):
     """Raised when token validation fails"""
@@ -112,9 +132,19 @@ class EvoAuthService:
                 auth_response = EvoAuthResponse(**response_data)
                 logger.info(f"Token validation successful for user: {auth_response.user.email}")
                 return auth_response
-            except (ValidationError, ValueError, KeyError) as e:
-                logger.error(f"Validation error parsing EvoAuth response: {e}")
-                logger.error(f"Raw response data: {response_data}")
+            except PydanticValidationError as e:
+                # Never log the payload or the pydantic error verbatim: both carry
+                # the token value. The field names are what a shape drift like
+                # EVO-2123 needs anyway.
+                safe_errors = [
+                    {"loc": err.get("loc"), "type": err.get("type"), "msg": err.get("msg")}
+                    for err in e.errors()
+                ]
+                logger.error(f"Validation error parsing EvoAuth response: {safe_errors}")
+                logger.error(f"EvoAuth response shape: {describe_payload_shape(response_data)}")
+                return None
+            except (ValueError, KeyError) as e:
+                logger.error(f"Error parsing EvoAuth response: {type(e).__name__}: {e}")
                 return None
                 
         except AuthenticationError:

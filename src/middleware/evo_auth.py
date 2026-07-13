@@ -262,7 +262,10 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
         except ServiceUnavailableError as e:
             return self._service_unavailable_response(str(e))
         except Exception as e:
-            logger.error(f"Unexpected error in EvoAuth middleware: {e}")
+            logger.error(
+                f"Unexpected error in EvoAuth middleware: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
             return self._service_unavailable_response("Authentication service error")
     
     def _should_skip(self, path: str) -> bool:

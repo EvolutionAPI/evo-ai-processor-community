@@ -28,7 +28,7 @@
 """
 
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 # ============================================================================
 # EvoAuth Schemas
@@ -72,8 +72,13 @@ class EvoAuthAccount(BaseModel):
     active_plan: Optional[EvoAuthPlan] = None
 
 class TokenInfo(BaseModel):
-    """Token information structure from validate endpoint"""
-    access_token: str
+    """Token information structure from validate endpoint
+
+    evo-auth names this field `access_token` for bearer tokens and `token` for
+    api_access_token ones; both are accepted and normalized to `access_token`,
+    which is what every consumer of token_info reads.
+    """
+    access_token: str = Field(validation_alias=AliasChoices("access_token", "token"))
     type: str = "bearer"
 
 class EvoAuthResponse(BaseModel):
