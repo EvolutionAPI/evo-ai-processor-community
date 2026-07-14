@@ -30,6 +30,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from src.models.models import CustomTool
+from src.services.adk.custom_tools import strip_modes_meta
 from typing import List, Optional, Dict, Any
 import uuid
 import logging
@@ -104,6 +105,9 @@ def convert_to_http_tool(custom_tool: CustomTool) -> Dict[str, Any]:
         },
         "description": custom_tool.description or "",
         "error_handling": default_error_handling,
-        "values": custom_tool.values,
+        # The wizard parks documentation under a reserved key of `values`. The tool
+        # builders drop it before hitting the wire, but it has no business being
+        # copied into an agent config either.
+        "values": strip_modes_meta(custom_tool.values),
     }
 

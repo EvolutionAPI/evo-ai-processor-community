@@ -33,7 +33,7 @@ import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
-from src.services.adk.custom_tools import strip_modes_meta
+from src.services.adk.custom_tools import CustomToolBuilder, strip_modes_meta
 from src.services.adk.tools import exit_loop
 from src.services.adk.tools import create_text_to_speech_tool
 
@@ -237,15 +237,18 @@ class ToolBuilder:
         """
         self.tools = []
 
-        # First, process custom_tool_ids using CustomToolBuilder
+        # First, process custom_tool_ids using CustomToolBuilder. It is handed the
+        # IDs only: the http_tools below are the same tools expanded from those very
+        # IDs (by get_agent, or by the core service when it saves the agent), so
+        # letting CustomToolBuilder see them too would build each tool twice.
+        built_from_ids = set()
         if agent_config.get("custom_tool_ids") and db:
-            from src.services.adk.custom_tools import CustomToolBuilder
-
             custom_tool_builder = CustomToolBuilder()
             custom_tools_from_ids = custom_tool_builder.build_tools(
-                agent_config, db
+                {"custom_tool_ids": agent_config["custom_tool_ids"]}, db
             )
             self.tools.extend(custom_tools_from_ids)
+            built_from_ids = {tool.func.__name__ for tool in custom_tools_from_ids}
             logger.info(
                 f"Added {len(custom_tools_from_ids)} tools from custom_tool_ids"
             )
@@ -266,6 +269,15 @@ class ToolBuilder:
             http_tools = agent_config["tools"].get("http_tools", [])
 
         for http_tool_config in http_tools:
+            # An http_tool that carries the name of a tool already built from its ID
+            # is that same tool, expanded into the config. The ID is the fresher
+            # source — the expanded copy can be a stale snapshot — so skip it.
+            if http_tool_config.get("name") in built_from_ids:
+                logger.debug(
+                    f"Skipping http_tool '{http_tool_config.get('name')}': "
+                    "already built from custom_tool_ids"
+                )
+                continue
             self.tools.append(self._create_http_tool(http_tool_config))
 
         # Add exit_loop tool if specified in configuration

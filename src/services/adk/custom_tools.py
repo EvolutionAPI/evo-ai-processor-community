@@ -298,7 +298,17 @@ class CustomToolBuilder:
         ):
             http_tools = tools_config["tools"].get("http_tools", [])
 
+        built_from_ids = {tool.func.__name__ for tool in self.tools}
         for http_tool_config in http_tools:
+            # The http_tools of an agent that also carries custom_tool_ids are those
+            # same tools expanded into its config. Building both registers the tool
+            # twice under one name.
+            if http_tool_config.get("name") in built_from_ids:
+                logger.debug(
+                    f"Skipping http_tool '{http_tool_config.get('name')}': "
+                    "already built from custom_tool_ids"
+                )
+                continue
             self.tools.append(self._create_http_tool(http_tool_config))
 
         # Add exit_loop tool if specified in configuration

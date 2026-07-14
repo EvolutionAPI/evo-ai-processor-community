@@ -130,11 +130,11 @@ class TestReconstructCustomConfigurations:
         http_tools = agent.config["custom_tools"]["http_tools"]
         assert [t["name"] for t in http_tools] == ["advice"]
 
-    def test_flags_config_dirty_so_the_commit_actually_writes(self):
-        """`config` is a plain JSON column: mutating the dict in place leaves the
-        attribute clean, so the commit emits no UPDATE — and, because it expires
-        the instance, the caller then re-reads the unreconstructed config and
-        sees no tools. Without flag_modified the whole rebuild is thrown away."""
+    def test_the_expansion_is_never_written_back(self):
+        """Persisting it would freeze a copy of the tool inside the agent: the
+        guard skips the expansion once http_tools is populated, so the stale copy
+        would be served forever and editing the tool would never reach the agent.
+        It is a read-path hydration — a GET must not write."""
 
         tool = _tool()
         agent = SimpleNamespace(
@@ -143,11 +143,46 @@ class TestReconstructCustomConfigurations:
         db = _fake_db()
 
         with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
-            with patch.object(agent_service, "flag_modified") as flag:
-                agent_service._reconstruct_custom_configurations(db, agent)
+            agent_service._reconstruct_custom_configurations(db, agent)
 
-        flag.assert_called_once_with(agent, "config")
-        db.commit.assert_called_once()
+        db.commit.assert_not_called()
+
+    def test_an_edit_to_the_tool_reaches_the_agent_on_the_next_read(self):
+        """The expansion is recomputed from the catalog row on every read, so a
+        tool edited in the catalog takes effect without touching the agent."""
+
+        tool = _tool(endpoint="https://api.adviceslip.com/advice")
+        agent = SimpleNamespace(
+            id=uuid.uuid4(), config={"custom_tool_ids": [str(tool.id)]}
+        )
+
+        with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
+            agent_service._reconstruct_custom_configurations(_fake_db(), agent)
+        assert agent.config["custom_tools"]["http_tools"][0]["endpoint"] == (
+            "https://api.adviceslip.com/advice"
+        )
+
+        # the user edits the tool in the catalog, then the agent is read again
+        tool.endpoint = "https://api.adviceslip.com/advice/search"
+        agent.config["custom_tools"]["http_tools"] = []
+        with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
+            agent_service._reconstruct_custom_configurations(_fake_db(), agent)
+
+        assert agent.config["custom_tools"]["http_tools"][0]["endpoint"] == (
+            "https://api.adviceslip.com/advice/search"
+        )
+
+    def test_the_reserved_metadata_is_not_copied_into_the_agent_config(self):
+        tool = _tool()
+        agent = SimpleNamespace(
+            id=uuid.uuid4(), config={"custom_tool_ids": [str(tool.id)]}
+        )
+
+        with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
+            agent_service._reconstruct_custom_configurations(_fake_db(), agent)
+
+        values = agent.config["custom_tools"]["http_tools"][0]["values"]
+        assert values == {"lang": "pt"}
 
     def test_an_unknown_id_is_skipped_not_raised(self):
         agent = SimpleNamespace(
@@ -166,6 +201,53 @@ class TestReconstructCustomConfigurations:
         assert not inspect.iscoroutinefunction(
             agent_service._reconstruct_custom_configurations
         )
+
+
+class TestAToolAttachedByIdIsRegisteredOnce:
+    """The config the builders receive is the expanded one: it carries the
+    custom_tool_ids AND the http_tools those IDs expand to. Reading both sources
+    naively registers the same tool under one name several times — the LLM then
+    gets N identical function declarations."""
+
+    def _expanded_config(self, tool):
+        agent = SimpleNamespace(
+            id=uuid.uuid4(), config={"custom_tool_ids": [str(tool.id)]}
+        )
+        with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
+            agent_service._reconstruct_custom_configurations(_fake_db(), agent)
+        return agent.config
+
+    def test_the_expanded_config_builds_exactly_one_tool(self):
+        tool = _tool()
+        config = self._expanded_config(tool)
+        assert config["custom_tool_ids"] and config["custom_tools"]["http_tools"]
+
+        with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
+            built = ToolBuilder().build_tools(config, db=_fake_db())
+
+        assert [t.func.__name__ for t in built] == ["advice"]
+
+    def test_an_inline_tool_of_its_own_still_gets_built(self):
+        """Only the expanded copies are dropped — a legacy inline tool that is not
+        one of the attached IDs must survive."""
+
+        tool = _tool()
+        config = self._expanded_config(tool)
+        config["custom_tools"]["http_tools"].append(
+            {
+                "name": "legacy_inline",
+                "description": "Configured by hand, not in the catalog",
+                "method": "GET",
+                "endpoint": "https://example.test/legacy",
+                "parameters": {},
+                "values": {},
+            }
+        )
+
+        with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
+            built = ToolBuilder().build_tools(config, db=_fake_db())
+
+        assert sorted(t.func.__name__ for t in built) == ["advice", "legacy_inline"]
 
 
 @pytest.mark.parametrize("builder", BUILDERS, ids=lambda b: b.__name__)

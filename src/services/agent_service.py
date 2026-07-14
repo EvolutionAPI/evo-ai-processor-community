@@ -28,7 +28,6 @@
 """
 
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException, status
 from src.models.models import Agent
@@ -64,20 +63,26 @@ def _convert_uuid_to_str(obj):
 
 
 def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
-    """Reconstruct custom tool and MCP server configurations from saved IDs.
+    """Expand the saved custom tool / MCP server IDs into the agent config.
 
     Synchronous: every lookup below is a sync ORM query, and get_agents_by_account
     (a sync function) calls this — as a coroutine it was never awaited there, so
-    agents listed by account silently kept their tools unreconstructed.
+    agents listed by account silently kept their tools unexpanded.
+
+    In-memory only: the expansion hydrates the config that is handed to the API
+    response and to the builders, and is never written back. Persisting it would
+    freeze a copy of the tool (endpoint, headers, values) inside the agent, and
+    the guards below — which skip the expansion once http_tools is populated —
+    would then keep serving that copy forever, so editing or deleting the tool in
+    the catalog would never reach the agent.
     """
     if not agent.config or not isinstance(agent.config, dict):
         return
 
     config = agent.config
-    reconstructed = False
 
-    # Only reconstruct if we have IDs but no corresponding configurations
-    # This prevents reconstruction during config processing and only does it during agent retrieval
+    # Only expand if we have IDs but no corresponding configurations
+    # This prevents expansion during config processing and only does it during agent retrieval
 
     # Reconstruct custom tools from IDs
     if (
@@ -115,7 +120,6 @@ def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
 
             # Replace existing http_tools with reconstructed ones
             config["custom_tools"]["http_tools"] = http_tools
-            reconstructed = True
 
             logger.debug(
                 f"Reconstructed {len(http_tools)} custom tools for agent {agent.id}"
@@ -149,7 +153,6 @@ def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
 
             # Replace existing custom_mcp_servers with reconstructed ones
             config["custom_mcp_servers"] = custom_servers_from_ids
-            reconstructed = True
 
             logger.debug(
                 f"Reconstructed {len(custom_servers_from_ids)} custom MCP servers for agent {agent.id}"
@@ -160,23 +163,6 @@ def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
                 f"Error reconstructing custom MCP servers for agent {agent.id}: {str(e)}"
             )
 
-    # Save changes if any reconstruction happened
-    if reconstructed:
-        try:
-            agent.config = config
-            # `config` is a plain JSON column, so mutating the dict in place does
-            # not mark the attribute dirty and the commit emits no UPDATE. Worse,
-            # the commit expires the instance, so the caller would then re-read
-            # the *unreconstructed* config straight from the database and see no
-            # tools at all. flag_modified forces the UPDATE.
-            flag_modified(agent, "config")
-            db.commit()
-            logger.debug(f"Saved reconstructed configurations for agent {agent.id}")
-        except Exception as e:
-            db.rollback()
-            logger.error(
-                f"Error saving reconstructed configurations for agent {agent.id}: {str(e)}"
-            )
 
 async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], api_key: str) -> Optional[dict]:
     """
