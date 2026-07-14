@@ -12,6 +12,16 @@ The ADK indexes sessions by (agent_id, user_id, session_id). Before this fix:
      owned by other users — real customer conversations leaked to any logged
      user on the same instance.
 
+The 500 in (2) is what currently keeps a user out of someone else's session, so
+resolving the ADK key from the owner cannot stand alone: it has to come with an
+ownership gate, otherwise chatting into a real customer conversation stops
+failing and starts working (the agent answers with the owner's history as
+context, and its events are appended to the customer's conversation). Every
+session-scoped route therefore resolves the caller the same way and denies on an
+owner mismatch — with agent-bot credentials exempt, since the CRM legitimately
+syncs and deletes the sessions of real conversations, which are owned by the
+contact.
+
 These tests exercise the handler functions directly (no FastAPI TestClient
 needed) with mocked deps so we lock the behavior at the code level and
 survive future refactors.
@@ -27,16 +37,37 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.api import chat_routes, session_routes
+from src.services import session_service as session_service_module
 
 
 AGENT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+OTHER_AGENT_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
 SESSION_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 OWNER_USER_ID = "owner-user@example.com"
 LOGGED_USER_ID = "another-user@example.com"
+CONTACT_ID = "5511999999999"
 
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def _make_request():
+    """error_response() feeds request.method/url.path into a Pydantic model, so
+    MagicMock defaults would fail validation. Give it real strings."""
+    request = MagicMock()
+    request.method = "GET"
+    request.url = SimpleNamespace(path=f"/sessions/{SESSION_ID}")
+    return request
+
+
+def _human(user_id):
+    return {"user_id": user_id, "email": user_id, "is_agent_bot": False}
+
+
+def _agent_bot():
+    """Agent-bot context as built by EvoAuthMiddleware: no user_id, no email."""
+    return {"agent_id": str(AGENT_ID), "agent_name": "bot", "is_agent_bot": True}
 
 
 def _make_db_session(owner_user_id=OWNER_USER_ID, session_id=SESSION_ID, app_name=None):
@@ -55,119 +86,192 @@ def _make_db_with_session(session_row):
     return db
 
 
+def _call_chat(db, current_user, mock_run):
+    payload = SimpleNamespace(message="oi", files=None)
+    with patch("src.api.chat_routes.run_agent_adk", new=mock_run):
+        return run(
+            chat_routes.chat(
+                payload=payload,
+                agent_id=str(AGENT_ID),
+                session_id=SESSION_ID,
+                request=_make_request(),
+                current_user=current_user,
+                db=db,
+                _=None,
+            )
+        )
+
+
 # -----------------------------------------------------------------------------
 # AC2 — POST /chat/{agent_id}/{session_id} must use the DB session owner as the
-#       ADK user_id lookup key, otherwise the ADK misses and returns 500.
+#       ADK user_id lookup key, and must refuse sessions owned by someone else.
 # -----------------------------------------------------------------------------
 class TestChatUsesSessionOwnerNotLoggedUser:
-    def test_chat_looks_up_session_and_passes_owner_id(self):
-        db_session = _make_db_session(owner_user_id=OWNER_USER_ID)
-        db = _make_db_with_session(db_session)
+    def test_chat_passes_owner_id_as_adk_lookup_key(self):
+        db = _make_db_with_session(_make_db_session(owner_user_id=OWNER_USER_ID))
+        mock_run = AsyncMock(return_value={"final_response": "hello", "message_history": []})
 
-        payload = SimpleNamespace(message="oi", files=None)
-        request = MagicMock()
-        current_user = {"user_id": LOGGED_USER_ID, "email": LOGGED_USER_ID}
-
-        fake_response = {"final_response": "hello", "message_history": []}
-
-        with patch(
-            "src.api.chat_routes.run_agent_adk",
-            new=AsyncMock(return_value=fake_response),
-        ) as mock_run:
-            run(
-                chat_routes.chat(
-                    payload=payload,
-                    agent_id=str(AGENT_ID),
-                    session_id=SESSION_ID,
-                    request=request,
-                    current_user=current_user,
-                    db=db,
-                    _=None,
-                )
-            )
+        _call_chat(db, _human(OWNER_USER_ID), mock_run)
 
         assert mock_run.await_count == 1
-        # run_agent_adk(agent_id, user_id, message, ...): user_id is the 2nd
-        # positional. Must be the session owner, NOT the logged user.
-        called_args, _kwargs = mock_run.call_args
-        assert called_args[1] == OWNER_USER_ID, (
-            f"chat handler passed {called_args[1]!r} as user_id but the "
-            f"session is owned by {OWNER_USER_ID!r} — EVO-2103 regression."
+        called_args, called_kwargs = mock_run.call_args
+        # run_agent(agent_id, external_id, message, ...) — the ADK lookup key is
+        # the `user_id` kwarg, and external_id (2nd positional) keeps the artifact
+        # namespace stable. Both must be the session owner.
+        assert called_kwargs.get("user_id") == OWNER_USER_ID
+        assert called_args[1] == OWNER_USER_ID
+
+    def test_chat_denies_session_owned_by_another_user(self):
+        """The whole point of EVO-2103: resolving the owner as the ADK key makes
+        cross-user chat WORK unless ownership is enforced. It must 403, and the
+        agent must never run inside the other owner's session."""
+        db = _make_db_with_session(_make_db_session(owner_user_id=OWNER_USER_ID))
+        mock_run = AsyncMock(return_value={"final_response": "leak", "message_history": []})
+
+        response = _call_chat(db, _human(LOGGED_USER_ID), mock_run)
+
+        assert mock_run.await_count == 0, (
+            "the agent ran inside a session owned by another user — EVO-2103 "
+            "cross-user regression"
         )
-        assert called_args[1] != LOGGED_USER_ID
+        assert response.status_code == 403
+
+    def test_chat_allows_agent_bot_on_contact_owned_session(self):
+        """Real conversations are owned by the contact, and the CRM drives them
+        with an agent-bot key. The ownership gate must not break that."""
+        db = _make_db_with_session(_make_db_session(owner_user_id=CONTACT_ID))
+        mock_run = AsyncMock(return_value={"final_response": "ok", "message_history": []})
+
+        _call_chat(db, _agent_bot(), mock_run)
+
+        assert mock_run.await_count == 1
+        _args, called_kwargs = mock_run.call_args
+        assert called_kwargs.get("user_id") == CONTACT_ID
 
     def test_chat_falls_back_to_logged_user_when_session_missing(self):
         """First-message-no-session flow: session row absent in DB. Backward
         compat — do not break existing bootstrap paths."""
-        db = _make_db_with_session(None)  # query returns no row
+        db = _make_db_with_session(None)
+        mock_run = AsyncMock(return_value={"final_response": "hi", "message_history": []})
 
-        payload = SimpleNamespace(message="oi", files=None)
-        request = MagicMock()
-        current_user = {"user_id": LOGGED_USER_ID}
+        _call_chat(db, _human(LOGGED_USER_ID), mock_run)
 
-        fake_response = {"final_response": "hi", "message_history": []}
-        with patch(
-            "src.api.chat_routes.run_agent_adk",
-            new=AsyncMock(return_value=fake_response),
-        ) as mock_run:
-            run(
-                chat_routes.chat(
-                    payload=payload,
-                    agent_id=str(AGENT_ID),
-                    session_id=SESSION_ID,
-                    request=request,
-                    current_user=current_user,
-                    db=db,
-                    _=None,
-                )
-            )
-
-        called_args, _kwargs = mock_run.call_args
+        assert mock_run.await_count == 1
+        called_args, called_kwargs = mock_run.call_args
+        assert called_kwargs.get("user_id") == LOGGED_USER_ID
         assert called_args[1] == LOGGED_USER_ID
+
+    def test_chat_scopes_session_lookup_to_the_agent_in_the_url(self):
+        """Session ids are unique per (app_name, user_id, id) in the ADK, so the
+        row must be fetched for the agent in the path — not by id alone."""
+        db = _make_db_with_session(_make_db_session(owner_user_id=OWNER_USER_ID))
+        mock_run = AsyncMock(return_value={"final_response": "hello", "message_history": []})
+
+        _call_chat(db, _human(OWNER_USER_ID), mock_run)
+
+        filter_args, _kwargs = db.query.return_value.filter.call_args
+        assert len(filter_args) == 2, (
+            "chat looked the session up by id alone; it must also filter by "
+            "app_name == agent_id"
+        )
 
 
 # -----------------------------------------------------------------------------
 # AC1 — GET /sessions/agent/{agent_id} must scope to the logged user.
 # -----------------------------------------------------------------------------
 class TestListSessionsScopedToLoggedUser:
-    def test_list_by_agent_filters_by_current_user_id(self):
-        db = MagicMock()
-        request = MagicMock()
-        current_user = {"user_id": LOGGED_USER_ID, "email": LOGGED_USER_ID}
-
-        fake_agent = SimpleNamespace(id=str(AGENT_ID), folder_id=None)
-
+    def _call_list(self, current_user, mock_list):
         with patch(
             "src.api.session_routes.agent_service.get_agent",
-            new=AsyncMock(return_value=fake_agent),
+            new=AsyncMock(return_value=SimpleNamespace(id=str(AGENT_ID), folder_id=None)),
         ), patch(
             "src.api.session_routes.verify_agent_access",
             new=AsyncMock(return_value=(True, False)),
         ), patch(
-            "src.api.session_routes.get_sessions_by_agent",
-            new=AsyncMock(return_value=[]),
-        ) as mock_list, patch(
-            "src.api.session_routes.get_session_metadata",
-            return_value=None,
+            "src.api.session_routes.get_sessions_by_agent", new=mock_list
+        ), patch(
+            "src.api.session_routes.get_session_metadata", return_value=None
         ):
-            run(
+            return run(
                 session_routes.get_agent_sessions(
-                    request=request,
+                    request=_make_request(),
                     agent_id=AGENT_ID,
                     current_user=current_user,
                     _=None,
-                    db=db,
+                    db=MagicMock(),
                 )
             )
 
+    def test_list_by_agent_filters_by_current_user_id(self):
+        mock_list = AsyncMock(return_value=[])
+
+        self._call_list(_human(LOGGED_USER_ID), mock_list)
+
         assert mock_list.await_count == 1
         _args, kwargs = mock_list.call_args
-        # get_sessions_by_agent(db, agent_id, skip, limit, user_id=...)
         assert kwargs.get("user_id") == LOGGED_USER_ID, (
             f"get_agent_sessions must pass the logged user as the user_id "
             f"filter to prevent cross-user leak — EVO-2103 regression. Got "
             f"user_id={kwargs.get('user_id')!r}."
         )
+
+    def test_list_denies_when_identity_cannot_be_resolved(self):
+        """An unresolvable identity must deny, never degrade into "no filter" —
+        get_sessions_by_agent treats a falsy user_id as "return everything"."""
+        mock_list = AsyncMock(return_value=[])
+
+        response = self._call_list({"is_agent_bot": False}, mock_list)
+
+        assert mock_list.await_count == 0
+        assert response.status_code == 403
+
+
+# -----------------------------------------------------------------------------
+# AC1 (sibling endpoint) — GET /sessions/account listed every session of every
+# accessible agent, which leaked the same conversations (and their session ids).
+# -----------------------------------------------------------------------------
+class TestAccountSessionsScopedToLoggedUser:
+    def test_get_sessions_by_account_propagates_the_user_filter(self):
+        mock_by_agent = AsyncMock(return_value=[])
+
+        with patch(
+            "src.services.agent_service.get_accessible_agents_for_account",
+            return_value=[SimpleNamespace(id=str(AGENT_ID))],
+        ), patch.object(
+            session_service_module, "get_sessions_by_agent", new=mock_by_agent
+        ):
+            run(
+                session_service_module.get_sessions_by_account(
+                    MagicMock(), LOGGED_USER_ID, LOGGED_USER_ID
+                )
+            )
+
+        assert mock_by_agent.await_count == 1
+        _args, kwargs = mock_by_agent.call_args
+        assert kwargs.get("user_id") == LOGGED_USER_ID, (
+            "/sessions/account must be owner-scoped like /sessions/agent/{id}"
+        )
+
+
+# -----------------------------------------------------------------------------
+# The owner filter must fail CLOSED: an empty identity filters to nothing.
+# -----------------------------------------------------------------------------
+class TestSessionFilterFailsClosed:
+    def _owner_filter_calls(self, user_id):
+        """The agent filter is applied on db.query(...); the owner filter is the
+        second .filter(), chained onto its result."""
+        db = MagicMock()
+        run(session_service_module.get_sessions_by_agent(db, AGENT_ID, user_id=user_id))
+        return db.query.return_value.filter.return_value.filter.call_count
+
+    def test_empty_user_id_still_filters(self):
+        assert self._owner_filter_calls("") == 1, (
+            "an empty user_id widened the query back to every session of the "
+            "agent — the filter must fail closed"
+        )
+
+    def test_none_user_id_opts_out_of_the_filter(self):
+        assert self._owner_filter_calls(None) == 0
 
 
 # -----------------------------------------------------------------------------
@@ -175,29 +279,19 @@ class TestListSessionsScopedToLoggedUser:
 #       another owner (LGPD: no customer conversation leaks between users).
 # -----------------------------------------------------------------------------
 class TestGetMessagesBlocksCrossUserRead:
-    def _run_get_messages(self, session_user_id, current_user_id):
-        db = MagicMock()
-        request = MagicMock()
-        # error_response() builds a Pydantic model that validates str fields
-        # on request.method and request.url.path — MagicMock defaults leak
-        # through Pydantic. Set explicit strings.
-        request.method = "GET"
-        request.url = SimpleNamespace(path=f"/sessions/{SESSION_ID}/messages")
-        current_user = {"user_id": current_user_id, "email": current_user_id}
-
+    def _run_get_messages(self, session_user_id, current_user):
         fake_session = SimpleNamespace(
             id=SESSION_ID,
             user_id=session_user_id,
             app_name=str(AGENT_ID),
         )
-        fake_agent = SimpleNamespace(id=str(AGENT_ID), folder_id=None)
 
         with patch(
             "src.api.session_routes.get_session_by_id",
             new=AsyncMock(return_value=fake_session),
         ), patch(
             "src.api.session_routes.agent_service.get_agent",
-            new=AsyncMock(return_value=fake_agent),
+            new=AsyncMock(return_value=SimpleNamespace(id=str(AGENT_ID), folder_id=None)),
         ), patch(
             "src.api.session_routes.verify_agent_access",
             new=AsyncMock(return_value=(True, False)),
@@ -207,37 +301,83 @@ class TestGetMessagesBlocksCrossUserRead:
         ):
             return run(
                 session_routes.get_agent_messages(
-                    request=request,
+                    request=_make_request(),
                     session_id=SESSION_ID,
                     current_user=current_user,
                     _=None,
-                    db=db,
+                    db=MagicMock(),
                 )
             )
 
     def test_returns_403_when_session_belongs_to_another_user(self):
-        response = self._run_get_messages(
-            session_user_id=OWNER_USER_ID,
-            current_user_id=LOGGED_USER_ID,
-        )
-        status_code = getattr(response, "status_code", None)
-        if status_code is None:
-            body = getattr(response, "body", b"")
-            assert b"403" in body or b"do not own" in body.lower(), (
-                f"Expected 403 forbidden response, got: {response!r}"
-            )
-        else:
-            assert status_code == 403, (
-                f"Expected 403, got {status_code}. EVO-2103 regression: "
-                f"cross-owner read must be denied."
-            )
+        response = self._run_get_messages(OWNER_USER_ID, _human(LOGGED_USER_ID))
+        assert response.status_code == 403
 
     def test_returns_200_for_own_session(self):
-        response = self._run_get_messages(
-            session_user_id=OWNER_USER_ID,
-            current_user_id=OWNER_USER_ID,
+        response = self._run_get_messages(OWNER_USER_ID, _human(OWNER_USER_ID))
+        assert response.status_code == 200
+
+    def test_agent_bot_may_read_contact_owned_session(self):
+        response = self._run_get_messages(CONTACT_ID, _agent_bot())
+        assert response.status_code == 200
+
+
+# -----------------------------------------------------------------------------
+# Deleting someone else's conversation is the destructive twin of reading it:
+# agent access is pool-wide on the single-tenant box, so only ownership stops it.
+# -----------------------------------------------------------------------------
+class TestDeleteSessionRequiresOwnership:
+    def _run_delete(self, session_user_id, current_user, mock_delete):
+        fake_session = SimpleNamespace(
+            id=SESSION_ID,
+            user_id=session_user_id,
+            app_name=str(AGENT_ID),
         )
-        status_code = getattr(response, "status_code", None)
-        # Success path may be a plain 200 (default). Just assert not 403.
-        if status_code is not None:
-            assert status_code != 403
+
+        with patch(
+            "src.api.session_routes.get_session_by_id",
+            new=AsyncMock(return_value=fake_session),
+        ), patch(
+            "src.api.session_routes.agent_service.get_agent",
+            new=AsyncMock(return_value=SimpleNamespace(id=str(AGENT_ID), folder_id=None)),
+        ), patch(
+            "src.api.session_routes.verify_agent_access",
+            new=AsyncMock(return_value=(True, False)),
+        ), patch(
+            "src.api.session_routes.delete_session", new=mock_delete
+        ):
+            return run(
+                session_routes.remove_session(
+                    request=_make_request(),
+                    session_id=SESSION_ID,
+                    current_user=current_user,
+                    _=None,
+                    db=MagicMock(),
+                )
+            )
+
+    def test_denies_delete_of_another_users_session(self):
+        mock_delete = AsyncMock()
+
+        response = self._run_delete(OWNER_USER_ID, _human(LOGGED_USER_ID), mock_delete)
+
+        assert mock_delete.await_count == 0, (
+            "a user deleted the session of a conversation owned by someone else"
+        )
+        assert response.status_code == 403
+
+    def test_allows_delete_of_own_session(self):
+        mock_delete = AsyncMock()
+
+        self._run_delete(OWNER_USER_ID, _human(OWNER_USER_ID), mock_delete)
+
+        assert mock_delete.await_count == 1
+
+    def test_allows_agent_bot_to_delete_contact_owned_session(self):
+        """The CRM's DeleteSessionJob calls this route with an agent-bot key to
+        clean up the sessions of real conversations."""
+        mock_delete = AsyncMock()
+
+        self._run_delete(CONTACT_ID, _agent_bot(), mock_delete)
+
+        assert mock_delete.await_count == 1

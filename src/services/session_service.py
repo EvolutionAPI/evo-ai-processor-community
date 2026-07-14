@@ -92,7 +92,10 @@ async def get_sessions_by_account(
 
         sessions = []
         for agent in agents:
-            db_sessions = await get_sessions_by_agent(db, agent.id)
+            # EVO-2103: scope to the caller. Without user_id this returned every
+            # session of every accessible agent - including the real WhatsApp
+            # conversations of other owners, and their session ids.
+            db_sessions = await get_sessions_by_agent(db, agent.id, user_id=user_id)
             sessions.extend(db_sessions)
 
         return sessions
@@ -112,9 +115,13 @@ async def get_sessions_by_agent(
     user_id: Optional[str] = None,
 ) -> List[dict]:
     """Search for sessions of an agent with pagination, optionally filtered by user_id.
-    
+
     IMPORTANT: This function queries ONLY the database (SessionModel table), NOT the ADK.
     All sessions must exist in the database to be returned.
+
+    EVO-2103: only user_id=None means "no owner filter" (service credentials). An
+    empty string is an identity that failed to resolve and filters to nothing -
+    it must never widen the query back to every session of the agent.
     """
     try:
         agent_id_str = str(agent_id)
@@ -129,8 +136,8 @@ async def get_sessions_by_agent(
             f"🔍 Querying sessions from DATABASE ONLY for agent_id={agent_id_str}, user_id={user_id}, skip={skip}, limit={limit}"
         )
         
-        # Filter by user_id if provided
-        if user_id:
+        # Filter by user_id if provided ("" filters, only None opts out)
+        if user_id is not None:
             query = query.filter(SessionModel.user_id == user_id)
             logger.info(f"Filtering by user_id: {user_id}")
         else:

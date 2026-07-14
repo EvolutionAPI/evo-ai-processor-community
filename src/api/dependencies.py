@@ -23,13 +23,55 @@ async def get_current_user(
     # Get user context from request state that was set by EvoAuthMiddleware
     if hasattr(request, 'state') and hasattr(request.state, 'user_context'):
         return request.state.user_context
-    
+
     # Fallback: user_context should always be set by middleware
     logger.error("User context not found in request state - middleware not configured properly")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Authentication required"
     )
+
+
+def is_agent_bot(user_context: Optional[Dict[str, Any]]) -> bool:
+    """True when the caller authenticated with an agent API key, not as a human."""
+    return bool(user_context and user_context.get("is_agent_bot"))
+
+
+def get_user_identity(user_context: Optional[Dict[str, Any]]) -> str:
+    """Resolve the id a human user's sessions are stored under.
+
+    Sessions carry the owner in SessionModel.user_id, and every session-scoped
+    route must resolve the caller the same way, otherwise the same person is a
+    different owner depending on the endpoint. Returns "" when no identity can
+    be resolved (agent bots, malformed contexts) - callers MUST treat "" as
+    "deny", never as "no filter".
+    """
+    if not user_context:
+        return ""
+    return str(
+        user_context.get("user_id")
+        or user_context.get("sub")
+        or user_context.get("email")
+        or ""
+    )
+
+
+def user_owns_session(user_context: Optional[Dict[str, Any]], session_owner_id: Any) -> bool:
+    """Object-level ownership check for session-scoped routes.
+
+    Agent bots are exempt: their sessions are stored under the contact id of the
+    conversation (never under the bot), and the key is already constrained to a
+    single agent by verify_agent_access. The CRM relies on this to sync/delete
+    the sessions of real conversations.
+    """
+    if is_agent_bot(user_context):
+        return True
+
+    identity = get_user_identity(user_context)
+    if not identity or not session_owner_id:
+        return False
+
+    return str(session_owner_id) == identity
 
 async def verify_agent_access(
     db: Session,
