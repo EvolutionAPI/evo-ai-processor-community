@@ -20,7 +20,11 @@ EXPECTED_GATES: dict[tuple[str, str], tuple[str, str]] = {
     ("DELETE", "/sessions/bulk"):                       ("ai_chat_sessions", "bulk_delete"),
     ("GET",    "/sessions/{session_id}"):               ("ai_agents",        "read"),
     ("GET",    "/sessions/{session_id}/messages"):      ("ai_agents",        "read"),
-    ("DELETE", "/sessions/{session_id}"):               ("ai_agents",        "write"),
+    # Deleting a session is a delete, not a write: the role editor renders Write
+    # and Delete as separate groups, so gating this on `write` would let an admin
+    # who deliberately withheld Delete still have sessions destroyed. Matches the
+    # approved decision table on EVO-2124.
+    ("DELETE", "/sessions/{session_id}"):               ("ai_agents",        "delete"),
     ("GET",    "/sessions/{session_id}/metadata"):      ("ai_agents",        "read"),
     ("PUT",    "/sessions/{session_id}/metadata"):      ("ai_agents",        "write"),
     ("DELETE", "/sessions/{session_id}/metadata"):      ("ai_agents",        "write"),
