@@ -149,7 +149,7 @@ async def create_new_session(
     current_user: Optional[dict] = Depends(get_current_user),
     request: Optional[Request] = Depends(get_request_optional),
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
-    _: Optional[None] = Depends(RequirePermission("ai_chat_sessions", "create")),
+    _: Optional[None] = Depends(RequirePermission("ai_agents", "write")),
     db: Session = Depends(get_db)
 ):
     """
@@ -373,7 +373,7 @@ async def get_agent_sessions(
     request: Request,
     agent_id: uuid.UUID,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+    _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db),
     skip: int = 0,
     limit: int = 100
@@ -554,7 +554,7 @@ async def get_session(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+    _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db)
 ):
     # Get the session
@@ -615,7 +615,7 @@ async def get_agent_messages(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-        _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+        _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -835,7 +835,7 @@ async def remove_session(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "delete")),
+    _: None = Depends(RequirePermission("ai_agents", "write")),
     db: Session = Depends(get_db)
 ):
     # Try to get the session
@@ -907,7 +907,7 @@ async def get_session_metadata_endpoint(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+    _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db)
 ):
     """Get metadata for a specific session"""
@@ -964,7 +964,7 @@ async def update_session_metadata_endpoint(
     session_id: str,
     metadata: SessionMetadataUpdate,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "update")),
+    _: None = Depends(RequirePermission("ai_agents", "write")),
     db: Session = Depends(get_db)
 ):
     """Update metadata for a specific session"""
@@ -1035,7 +1035,7 @@ async def delete_session_metadata_endpoint(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "delete")),
+    _: None = Depends(RequirePermission("ai_agents", "write")),
     db: Session = Depends(get_db)
 ):
     """Delete metadata for a specific session"""
