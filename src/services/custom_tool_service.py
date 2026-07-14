@@ -29,10 +29,26 @@
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-from src.schemas.schemas import CustomTool
+from src.models.models import CustomTool
+from src.services.adk.custom_tools import strip_modes_meta
 from typing import List, Optional, Dict, Any
+import uuid
 import logging
 logger = logging.getLogger(__name__)
+
+# Fetch a single custom tool by id
+def get_custom_tool(db: Session, tool_id: uuid.UUID) -> Optional[CustomTool]:
+    """Get a single custom tool by id.
+
+    Synchronous on purpose: the ADK tool builder runs inside the sync request
+    path and calls this without awaiting.
+    """
+
+    try:
+        return db.query(CustomTool).filter(CustomTool.id == tool_id).first()
+    except SQLAlchemyError as e:
+        logger.error(f"Error getting custom tool {tool_id}: {str(e)}")
+        return None
 
 # Fetch custom tools with optional filtering
 async def get_custom_tools(
@@ -89,6 +105,9 @@ def convert_to_http_tool(custom_tool: CustomTool) -> Dict[str, Any]:
         },
         "description": custom_tool.description or "",
         "error_handling": default_error_handling,
-        "values": custom_tool.values,
+        # The wizard parks documentation under a reserved key of `values`. The tool
+        # builders drop it before hitting the wire, but it has no business being
+        # copied into an agent config either.
+        "values": strip_modes_meta(custom_tool.values),
     }
 

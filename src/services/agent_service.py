@@ -62,16 +62,27 @@ def _convert_uuid_to_str(obj):
         return obj
 
 
-async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
-    """Reconstruct custom tool and MCP server configurations from saved IDs"""
+def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
+    """Expand the saved custom tool / MCP server IDs into the agent config.
+
+    Synchronous: every lookup below is a sync ORM query, and get_agents_by_account
+    (a sync function) calls this — as a coroutine it was never awaited there, so
+    agents listed by account silently kept their tools unexpanded.
+
+    In-memory only: the expansion hydrates the config that is handed to the API
+    response and to the builders, and is never written back. Persisting it would
+    freeze a copy of the tool (endpoint, headers, values) inside the agent, and
+    the guards below — which skip the expansion once http_tools is populated —
+    would then keep serving that copy forever, so editing or deleting the tool in
+    the catalog would never reach the agent.
+    """
     if not agent.config or not isinstance(agent.config, dict):
         return
 
     config = agent.config
-    reconstructed = False
 
-    # Only reconstruct if we have IDs but no corresponding configurations
-    # This prevents reconstruction during config processing and only does it during agent retrieval
+    # Only expand if we have IDs but no corresponding configurations
+    # This prevents expansion during config processing and only does it during agent retrieval
 
     # Reconstruct custom tools from IDs
     if (
@@ -87,19 +98,17 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
             tool_ids = [
                 uuid.UUID(str(tool_id)) for tool_id in config["custom_tool_ids"]
             ]
-            custom_tools_from_ids = await custom_tool_service.get_custom_tools(
-            )
-
-            # Filter by IDs
-            filtered_tools = [
-                tool for tool in custom_tools_from_ids if tool.id in tool_ids
-            ]
 
             # Convert to HTTPTool format
             http_tools = []
-            for tool in filtered_tools:
-                http_tool = custom_tool_service.convert_to_http_tool(tool)
-                http_tools.append(http_tool)
+            for tool_id in tool_ids:
+                tool = custom_tool_service.get_custom_tool(db, tool_id)
+                if not tool:
+                    logger.warning(
+                        f"Custom tool not found: {tool_id} (agent {agent.id})"
+                    )
+                    continue
+                http_tools.append(custom_tool_service.convert_to_http_tool(tool))
 
             # Update config with reconstructed tools
             if "custom_tools" not in config:
@@ -111,7 +120,6 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
 
             # Replace existing http_tools with reconstructed ones
             config["custom_tools"]["http_tools"] = http_tools
-            reconstructed = True
 
             logger.debug(
                 f"Reconstructed {len(http_tools)} custom tools for agent {agent.id}"
@@ -145,7 +153,6 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
 
             # Replace existing custom_mcp_servers with reconstructed ones
             config["custom_mcp_servers"] = custom_servers_from_ids
-            reconstructed = True
 
             logger.debug(
                 f"Reconstructed {len(custom_servers_from_ids)} custom MCP servers for agent {agent.id}"
@@ -156,17 +163,6 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
                 f"Error reconstructing custom MCP servers for agent {agent.id}: {str(e)}"
             )
 
-    # Save changes if any reconstruction happened
-    if reconstructed:
-        try:
-            agent.config = config
-            db.commit()
-            logger.debug(f"Saved reconstructed configurations for agent {agent.id}")
-        except Exception as e:
-            db.rollback()
-            logger.error(
-                f"Error saving reconstructed configurations for agent {agent.id}: {str(e)}"
-            )
 
 async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], api_key: str) -> Optional[dict]:
     """
@@ -381,7 +377,7 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
             return None
 
         # Reconstruct custom configurations from saved IDs
-        await _reconstruct_custom_configurations(db, agent)
+        _reconstruct_custom_configurations(db, agent)
 
         # Sanitize agent name if it contains spaces or special characters
         if agent.name and any(c for c in agent.name if not (c.isalnum() or c == "_")):

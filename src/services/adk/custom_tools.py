@@ -27,7 +27,7 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 import requests
@@ -36,6 +36,21 @@ import urllib.parse
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+# The Custom Tools wizard parks the "what it receives / what it returns"
+# descriptions inside `values` under a reserved key. It is documentation, never
+# a request parameter — it must not reach the wire as a query param or a body
+# field. `__modes_meta__` is the legacy spelling.
+MODES_META_KEYS = frozenset({"__evo_modes_meta__", "__modes_meta__"})
+
+
+def strip_modes_meta(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Drop the reserved documentation keys from a tool's default values."""
+    return {
+        key: value
+        for key, value in (values or {}).items()
+        if key not in MODES_META_KEYS
+    }
 
 
 def exit_loop(tool_context: ToolContext):
@@ -58,7 +73,7 @@ class CustomToolBuilder:
         method = tool_config["method"]
         headers = tool_config.get("headers", {})
         parameters = tool_config.get("parameters", {}) or {}
-        values = tool_config.get("values", {})
+        values = strip_modes_meta(tool_config.get("values"))
         error_handling = tool_config.get("error_handling", {})
 
         path_params = parameters.get("path_params") or {}
@@ -231,15 +246,11 @@ class CustomToolBuilder:
             for tool_id_str in custom_tool_ids:
                 try:
                     # Convert to UUID and get from database
-                    tool_id = uuid.UUID(tool_id_str)
+                    tool_id = uuid.UUID(str(tool_id_str))
                     custom_tool = custom_tool_service.get_custom_tool(db, tool_id)
 
                     if not custom_tool:
                         logger.warning(f"Custom tool not found: {tool_id_str}")
-                        continue
-
-                    if not custom_tool.is_active:
-                        logger.warning(f"Custom tool is inactive: {tool_id_str}")
                         continue
 
                     # Convert database model to tool configuration format
@@ -287,7 +298,17 @@ class CustomToolBuilder:
         ):
             http_tools = tools_config["tools"].get("http_tools", [])
 
+        built_from_ids = {tool.func.__name__ for tool in self.tools}
         for http_tool_config in http_tools:
+            # The http_tools of an agent that also carries custom_tool_ids are those
+            # same tools expanded into its config. Building both registers the tool
+            # twice under one name.
+            if http_tool_config.get("name") in built_from_ids:
+                logger.debug(
+                    f"Skipping http_tool '{http_tool_config.get('name')}': "
+                    "already built from custom_tool_ids"
+                )
+                continue
             self.tools.append(self._create_http_tool(http_tool_config))
 
         # Add exit_loop tool if specified in configuration
