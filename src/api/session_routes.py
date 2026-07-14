@@ -68,7 +68,14 @@ from src.schemas.schemas import (
     SessionCreateRequest,
 )
 import logging
-from src.api.dependencies import verify_agent_access, get_current_user, get_request_optional
+from src.api.dependencies import (
+    verify_agent_access,
+    get_current_user,
+    get_request_optional,
+    get_user_identity,
+    is_agent_bot,
+    user_owns_session,
+)
 from src.api.a2a_routes import verify_api_key
 from src.middleware.permissions import RequirePermission
 from src.services.agent_service import get_agent
@@ -317,12 +324,24 @@ async def create_new_session(
     }
 )
 async def get_account_sessions(
+    request: Request,
     current_user: dict = Depends(get_current_user),
     _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
     db: Session = Depends(get_db)
 ):
-    user_id = str(current_user.get("user_id") or current_user.get("email") or "")
+    user_id = get_user_identity(current_user)
     email = current_user.get("email", "")
+
+    # EVO-2103: same scoping rule as /sessions/agent/{id} - this endpoint used to
+    # return every session of every accessible agent, which leaked the real
+    # conversations (and their ids) of other owners to any authenticated user.
+    if not user_id:
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="Unable to resolve the identity of the caller",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     # Get sessions from database
     sessions = await get_sessions_by_account(db, user_id, email)
@@ -376,14 +395,26 @@ async def get_agent_sessions(
 
     # EVO-2103: filter sessions by the logged-in user. The test panel must not
     # leak WhatsApp/production conversations (which live under different owners
-    # like contact_id) into another user's test-session list.
-    current_user_id = str(current_user.get("user_id") or current_user.get("email") or "")
+    # like contact_id) into another user's test-session list. An unresolvable
+    # identity denies - it must never degrade into "no filter".
+    current_user_id = get_user_identity(current_user)
+    if not current_user_id and not is_agent_bot(current_user):
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="Unable to resolve the identity of the caller",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
+
+    # Agent bots hold a service credential already constrained to their own agent
+    # and own no sessions themselves, so they are not owner-scoped.
+    scope_user_id = None if is_agent_bot(current_user) else current_user_id
 
     logger.info(
-        f"Searching sessions for agent {agent_id} scoped to user {current_user_id}"
+        f"Searching sessions for agent {agent_id} scoped to user {scope_user_id}"
     )
 
-    sessions = await get_sessions_by_agent(db, agent_id, skip, limit, user_id=current_user_id)
+    sessions = await get_sessions_by_agent(db, agent_id, skip, limit, user_id=scope_user_id)
     
     logger.info(
         f"✅ Found {len(sessions)} sessions for agent {agent_id}"
@@ -436,6 +467,14 @@ async def bulk_delete_sessions(
             if not session:
                 permission_errors.append(
                     {"session_id": session_id, "error": "Session not found"}
+                )
+                continue
+
+            # EVO-2103: same ownership rule as the single delete - agent access is
+            # pool-wide and does not protect another owner's conversation.
+            if not user_owns_session(current_user, session.user_id):
+                permission_errors.append(
+                    {"session_id": session_id, "error": "Access denied: you do not own this session"}
                 )
                 continue
 
@@ -543,6 +582,20 @@ async def get_session(
                 db, agent, "read", current_user
             )
 
+    # EVO-2103: the session payload carries the ADK state of the conversation,
+    # so it is owner-scoped like /messages.
+    if not user_owns_session(current_user, session.user_id):
+        logger.warning(
+            f"Forbidden read on session {session_id}: owner={session.user_id!r} "
+            f"logged={get_user_identity(current_user)!r}"
+        )
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="You do not own this session",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
+
     return success_response(
         data=session.model_dump() if hasattr(session, 'model_dump') else session.__dict__,
         message="Session retrieved successfully"
@@ -611,11 +664,10 @@ async def get_agent_messages(
     # EVO-2103: session content must not leak across owners. A user may only
     # read messages of sessions they own (test panel sessions). Production
     # conversations are viewed via the CRM inbox, not this endpoint.
-    current_user_id = str(current_user.get("user_id") or current_user.get("email") or "")
-    if user_id != current_user_id:
+    if not user_owns_session(current_user, user_id):
         logger.warning(
             f"Forbidden read on session {session_id}: owner={user_id!r} "
-            f"logged={current_user_id!r}"
+            f"logged={get_user_identity(current_user)!r}"
         )
         return error_response(
             request=request,
@@ -780,6 +832,7 @@ async def get_agent_messages(
     }
 )
 async def remove_session(
+    request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
     _: None = Depends(RequirePermission("ai_chat_sessions", "delete")),
@@ -803,6 +856,22 @@ async def remove_session(
                 has_access, is_shared_access = await verify_agent_access(
                     db, agent, "read", current_user
                 )
+
+        # EVO-2103: agent access is pool-wide on the single-tenant box, so it does
+        # not stop a user from deleting the session of a real customer conversation
+        # owned by someone else. Ownership does. The CRM deletes those sessions with
+        # an agent-bot key, which user_owns_session exempts.
+        if not user_owns_session(current_user, session.user_id):
+            logger.warning(
+                f"Forbidden delete on session {session_id}: owner={session.user_id!r} "
+                f"logged={get_user_identity(current_user)!r}"
+            )
+            return error_response(
+                request=request,
+                code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+                message="You do not own this session",
+                status_code=status.HTTP_403_FORBIDDEN
+            )
 
         # Delete the session (from both database and ADK)
         await delete_session(session_service, session_id, db=db)
