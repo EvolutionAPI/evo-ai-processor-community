@@ -38,7 +38,8 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 from src.config.database import get_db
-from src.api.dependencies import get_current_user
+from src.models.models import Session as SessionModel
+from src.api.dependencies import get_current_user, get_user_identity, user_owns_session
 from src.services import (
     agent_service,
     folder_share_service
@@ -688,7 +689,46 @@ async def chat(
     db: Session = Depends(get_db),
     _: None = Depends(RequirePermission("ai_agent_processor", "execute")),
 ):
-    user_id = current_user.get("user_id") or current_user.get("sub") or current_user.get("email")
+    logged_user_id = get_user_identity(current_user)
+
+    # EVO-2103: the ADK indexes sessions by (agent_id, user_id, session_id), so
+    # the lookup key must be the session owner (SessionModel.user_id), not the
+    # logged user - they diverge for sessions the user does not own, and the ADK
+    # then misses -> 500. But running someone else's session is exactly what must
+    # NOT happen: the agent would answer with the owner's history as context and
+    # its events would be appended to a real customer conversation. So resolve the
+    # owner, and deny when it is not the caller.
+    db_session = (
+        db.query(SessionModel)
+        .filter(
+            SessionModel.id == session_id,
+            SessionModel.app_name == str(agent_id),
+        )
+        .first()
+    )
+    session_owner_id = db_session.user_id if db_session and db_session.user_id else None
+
+    if session_owner_id and not user_owns_session(current_user, session_owner_id):
+        logger.warning(
+            f"Forbidden chat on session {session_id}: owner={session_owner_id!r} "
+            f"logged={logged_user_id!r}"
+        )
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="You do not own this session",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
+
+    # No session row yet (first message bootstraps it): fall back to the caller.
+    user_id = session_owner_id or logged_user_id
+    if not user_id:
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="Unable to resolve the session owner for this request",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     try:
         final_response = await run_agent_adk(
@@ -701,6 +741,7 @@ async def chat(
             db,
             session_id=session_id,
             files=payload.files,
+            user_id=user_id,
         )
 
         return success_response(
