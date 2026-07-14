@@ -374,17 +374,16 @@ async def get_agent_sessions(
     # Verify if the user has access to the agent (including shared folder access)
     has_access, is_shared_access = await verify_agent_access(db, agent, "read", current_user)
 
-    # List ALL sessions for the agent (both test sessions and real sessions)
-    
+    # EVO-2103: filter sessions by the logged-in user. The test panel must not
+    # leak WhatsApp/production conversations (which live under different owners
+    # like contact_id) into another user's test-session list.
+    current_user_id = str(current_user.get("user_id") or current_user.get("email") or "")
+
     logger.info(
-        f"Searching sessions for agent {agent_id}"
-    )
-    logger.info(
-        f"Current user data: user_id={current_user.get('user_id')}, email={current_user.get('email')}"
+        f"Searching sessions for agent {agent_id} scoped to user {current_user_id}"
     )
 
-    # Get ALL sessions from database for this agent (no user_id filter)
-    sessions = await get_sessions_by_agent(db, agent_id, skip, limit, user_id=None)
+    sessions = await get_sessions_by_agent(db, agent_id, skip, limit, user_id=current_user_id)
     
     logger.info(
         f"✅ Found {len(sessions)} sessions for agent {agent_id}"
@@ -607,6 +606,22 @@ async def get_agent_messages(
             code=map_status_to_error_code(status.HTTP_400_BAD_REQUEST),
             message="Session missing app_name or user_id",
             status_code=status.HTTP_400_BAD_REQUEST
+        )
+
+    # EVO-2103: session content must not leak across owners. A user may only
+    # read messages of sessions they own (test panel sessions). Production
+    # conversations are viewed via the CRM inbox, not this endpoint.
+    current_user_id = str(current_user.get("user_id") or current_user.get("email") or "")
+    if user_id != current_user_id:
+        logger.warning(
+            f"Forbidden read on session {session_id}: owner={user_id!r} "
+            f"logged={current_user_id!r}"
+        )
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="You do not own this session",
+            status_code=status.HTTP_403_FORBIDDEN
         )
 
     try:

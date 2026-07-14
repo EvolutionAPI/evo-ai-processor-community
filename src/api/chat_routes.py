@@ -38,6 +38,7 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 from src.config.database import get_db
+from src.models.models import Session as SessionModel
 from src.api.dependencies import get_current_user
 from src.services import (
     agent_service,
@@ -680,7 +681,15 @@ async def chat(
     db: Session = Depends(get_db),
     _: None = Depends(RequirePermission("ai_agent_processor", "execute")),
 ):
-    user_id = current_user.get("user_id") or current_user.get("sub") or current_user.get("email")
+    logged_user_id = current_user.get("user_id") or current_user.get("sub") or current_user.get("email")
+
+    # EVO-2103: the ADK indexes sessions by (agent_id, user_id, session_id).
+    # If we look up with the logged user when the session was stored by another
+    # owner (e.g. contact_id from a WhatsApp conversation), ADK misses -> 500.
+    # Source of truth is SessionModel.user_id.
+    db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    session_owner_id = db_session.user_id if db_session and db_session.user_id else logged_user_id
+    user_id = session_owner_id
 
     try:
         final_response = await run_agent_adk(
