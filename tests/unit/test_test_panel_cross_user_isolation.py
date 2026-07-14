@@ -381,3 +381,147 @@ class TestDeleteSessionRequiresOwnership:
         self._run_delete(CONTACT_ID, _agent_bot(), mock_delete)
 
         assert mock_delete.await_count == 1
+
+
+# -----------------------------------------------------------------------------
+# EVO-2124 — the /metadata trio was the hole EVO-2103 left open. It stayed shut
+# only because ai_chat_sessions is an all-system resource (no checkbox in the
+# role editor, so effectively admin-only). EVO-2124 re-gates these routes on
+# ai_agents.{read,write}, which an admin DOES tick for an atendente — so the
+# missing owner check becomes reachable and has to be closed here.
+#
+# GET is the real leak: get_session_metadata() queries by session_id alone.
+# PUT/DELETE are scoped by created_by_user_id in the service, so they could not
+# corrupt another owner's row — they are gated for uniformity (and so PUT stops
+# hanging a row of your own off someone else's session).
+# -----------------------------------------------------------------------------
+class TestSessionMetadataRequiresOwnership:
+    def _patched(self, session_user_id):
+        fake_session = SimpleNamespace(
+            id=SESSION_ID,
+            user_id=session_user_id,
+            app_name=str(AGENT_ID),
+        )
+        return patch(
+            "src.api.session_routes.get_session_by_id",
+            new=AsyncMock(return_value=fake_session),
+        ), patch(
+            "src.api.session_routes.agent_service.get_agent",
+            new=AsyncMock(return_value=SimpleNamespace(id=str(AGENT_ID), folder_id=None)),
+        ), patch(
+            "src.api.session_routes.verify_agent_access",
+            new=AsyncMock(return_value=(True, False)),
+        )
+
+    def _run_get(self, session_user_id, current_user, mock_get):
+        p1, p2, p3 = self._patched(session_user_id)
+        with p1, p2, p3, patch(
+            "src.api.session_routes.get_session_metadata", new=mock_get
+        ):
+            return run(
+                session_routes.get_session_metadata_endpoint(
+                    request=_make_request(),
+                    session_id=SESSION_ID,
+                    current_user=current_user,
+                    _=None,
+                    db=MagicMock(),
+                )
+            )
+
+    def _run_put(self, session_user_id, current_user, mock_update):
+        p1, p2, p3 = self._patched(session_user_id)
+        with p1, p2, p3, patch(
+            "src.api.session_routes.update_session_metadata", new=mock_update
+        ), patch(
+            "src.api.session_routes.create_session_metadata",
+            return_value=SimpleNamespace(
+                name="n", description="d", tags=[], updated_at="2026-01-01T00:00:00"
+            ),
+        ):
+            return run(
+                session_routes.update_session_metadata_endpoint(
+                    request=_make_request(),
+                    session_id=SESSION_ID,
+                    metadata=SimpleNamespace(name="n", description="d", tags=[]),
+                    current_user=current_user,
+                    _=None,
+                    db=MagicMock(),
+                )
+            )
+
+    def _run_delete(self, session_user_id, current_user, mock_delete):
+        p1, p2, p3 = self._patched(session_user_id)
+        with p1, p2, p3, patch(
+            "src.api.session_routes.delete_session_metadata", new=mock_delete
+        ):
+            return run(
+                session_routes.delete_session_metadata_endpoint(
+                    request=_make_request(),
+                    session_id=SESSION_ID,
+                    current_user=current_user,
+                    _=None,
+                    db=MagicMock(),
+                )
+            )
+
+    def test_get_denies_metadata_of_another_users_session(self):
+        mock_get = MagicMock(return_value={"name": "Cliente João - cobrança"})
+
+        response = self._run_get(OWNER_USER_ID, _human(LOGGED_USER_ID), mock_get)
+
+        assert response.status_code == 403
+        assert mock_get.call_count == 0, (
+            "metadata of a session owned by someone else was read — the row is "
+            "fetched by session_id alone, so only the owner gate stops it"
+        )
+
+    def test_get_allows_own_metadata(self):
+        mock_get = MagicMock(return_value={"name": "meu teste"})
+
+        response = self._run_get(OWNER_USER_ID, _human(OWNER_USER_ID), mock_get)
+
+        assert response.status_code == 200
+        assert mock_get.call_count == 1
+
+    def test_get_allows_agent_bot(self):
+        mock_get = MagicMock(return_value=None)
+
+        response = self._run_get(CONTACT_ID, _agent_bot(), mock_get)
+
+        assert response.status_code == 200
+
+    def test_put_denies_write_on_another_users_session(self):
+        mock_update = MagicMock()
+
+        response = self._run_put(OWNER_USER_ID, _human(LOGGED_USER_ID), mock_update)
+
+        assert response.status_code == 403
+        assert mock_update.call_count == 0
+
+    def test_put_allows_own_session(self):
+        mock_update = MagicMock(
+            return_value=SimpleNamespace(
+                name="n", description="d", tags=[], updated_at="2026-01-01T00:00:00"
+            )
+        )
+
+        response = self._run_put(OWNER_USER_ID, _human(OWNER_USER_ID), mock_update)
+
+        assert response.status_code == 200
+        assert mock_update.call_count == 1
+
+    def test_delete_denies_on_another_users_session(self):
+        mock_delete = MagicMock(return_value=True)
+
+        response = self._run_delete(OWNER_USER_ID, _human(LOGGED_USER_ID), mock_delete)
+
+        assert response.status_code == 403
+        assert mock_delete.call_count == 0
+
+    def test_delete_allows_own_session(self):
+        mock_delete = MagicMock(return_value=True)
+
+        response = self._run_delete(OWNER_USER_ID, _human(OWNER_USER_ID), mock_delete)
+
+        assert response.status_code == 204
+        assert mock_delete.call_count == 1

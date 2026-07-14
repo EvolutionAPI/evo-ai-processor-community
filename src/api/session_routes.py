@@ -149,7 +149,7 @@ async def create_new_session(
     current_user: Optional[dict] = Depends(get_current_user),
     request: Optional[Request] = Depends(get_request_optional),
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
-    _: Optional[None] = Depends(RequirePermission("ai_chat_sessions", "create")),
+    _: Optional[None] = Depends(RequirePermission("ai_agents", "write")),
     db: Session = Depends(get_db)
 ):
     """
@@ -373,7 +373,7 @@ async def get_agent_sessions(
     request: Request,
     agent_id: uuid.UUID,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+    _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db),
     skip: int = 0,
     limit: int = 100
@@ -554,7 +554,7 @@ async def get_session(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+    _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db)
 ):
     # Get the session
@@ -615,7 +615,7 @@ async def get_agent_messages(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-        _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+        _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db)
 ):
     """
@@ -835,7 +835,7 @@ async def remove_session(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "delete")),
+    _: None = Depends(RequirePermission("ai_agents", "delete")),
     db: Session = Depends(get_db)
 ):
     # Try to get the session
@@ -907,7 +907,7 @@ async def get_session_metadata_endpoint(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "read")),
+    _: None = Depends(RequirePermission("ai_agents", "read")),
     db: Session = Depends(get_db)
 ):
     """Get metadata for a specific session"""
@@ -935,6 +935,23 @@ async def get_session_metadata_endpoint(
             has_access, is_shared_access = await verify_agent_access(
                 db, agent, "read", current_user
             )
+
+    # EVO-2124: get_session_metadata() looks the row up by session_id ALONE, so
+    # without this gate any holder of ai_agents.read reads the name/description/
+    # tags of a session owned by someone else — including the real customer
+    # conversations EVO-2103 fenced off on every other session-scoped route.
+    # Same owner check as GET /{session_id}; agent bots stay exempt.
+    if not user_owns_session(current_user, session.user_id):
+        logger.warning(
+            f"Forbidden metadata read on session {session_id}: owner={session.user_id!r} "
+            f"logged={get_user_identity(current_user)!r}"
+        )
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="You do not own this session",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     # Get metadata
     metadata = get_session_metadata(db, session_id)
@@ -964,7 +981,7 @@ async def update_session_metadata_endpoint(
     session_id: str,
     metadata: SessionMetadataUpdate,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "update")),
+    _: None = Depends(RequirePermission("ai_agents", "write")),
     db: Session = Depends(get_db)
 ):
     """Update metadata for a specific session"""
@@ -992,6 +1009,22 @@ async def update_session_metadata_endpoint(
             has_access, is_shared_access = await verify_agent_access(
                 db, agent, "write", current_user
             )
+
+    # EVO-2124: the service scopes the row by created_by_user_id, so a non-owner
+    # cannot overwrite someone else's metadata — but it would silently CREATE a
+    # row of their own hanging off another user's session. Deny at the door, like
+    # every other session-scoped route (EVO-2103). Agent bots stay exempt.
+    if not user_owns_session(current_user, session.user_id):
+        logger.warning(
+            f"Forbidden metadata write on session {session_id}: owner={session.user_id!r} "
+            f"logged={get_user_identity(current_user)!r}"
+        )
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="You do not own this session",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     # Use user_id from the authenticated user
     user_id = str(current_user.get("user_id") or current_user.get("email") or "")
@@ -1035,7 +1068,7 @@ async def delete_session_metadata_endpoint(
     request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user),
-    _: None = Depends(RequirePermission("ai_chat_sessions", "delete")),
+    _: None = Depends(RequirePermission("ai_agents", "write")),
     db: Session = Depends(get_db)
 ):
     """Delete metadata for a specific session"""
@@ -1063,6 +1096,21 @@ async def delete_session_metadata_endpoint(
             has_access, is_shared_access = await verify_agent_access(
                 db, agent, "write", current_user
             )
+
+    # EVO-2124: owner check before the delete, mirroring the other session-scoped
+    # routes (EVO-2103). The service already scopes by created_by_user_id, so this
+    # turns a misleading 404 into an honest 403 and keeps the doctrine uniform.
+    if not user_owns_session(current_user, session.user_id):
+        logger.warning(
+            f"Forbidden metadata delete on session {session_id}: owner={session.user_id!r} "
+            f"logged={get_user_identity(current_user)!r}"
+        )
+        return error_response(
+            request=request,
+            code=map_status_to_error_code(status.HTTP_403_FORBIDDEN),
+            message="You do not own this session",
+            status_code=status.HTTP_403_FORBIDDEN
+        )
 
     # Use user_id from the authenticated user
     user_id = str(current_user.get("user_id") or current_user.get("email") or "")
