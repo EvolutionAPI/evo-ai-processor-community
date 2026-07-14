@@ -34,7 +34,14 @@ from src.config.settings import settings
 
 POSTGRES_CONNECTION_STRING = settings.POSTGRES_CONNECTION_STRING
 
-engine = create_engine(POSTGRES_CONNECTION_STRING)
+# pool_pre_ping revalidates a pooled connection before handing it out, so a
+# connection dropped by the server (restart, idle timeout) is recycled instead
+# of surfacing as a 500 on the next request.
+engine = create_engine(
+    POSTGRES_CONNECTION_STRING,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

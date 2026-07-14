@@ -28,6 +28,7 @@
 """
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException, status
 from src.models.models import Agent
@@ -62,8 +63,13 @@ def _convert_uuid_to_str(obj):
         return obj
 
 
-async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
-    """Reconstruct custom tool and MCP server configurations from saved IDs"""
+def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
+    """Reconstruct custom tool and MCP server configurations from saved IDs.
+
+    Synchronous: every lookup below is a sync ORM query, and get_agents_by_account
+    (a sync function) calls this — as a coroutine it was never awaited there, so
+    agents listed by account silently kept their tools unreconstructed.
+    """
     if not agent.config or not isinstance(agent.config, dict):
         return
 
@@ -87,19 +93,17 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
             tool_ids = [
                 uuid.UUID(str(tool_id)) for tool_id in config["custom_tool_ids"]
             ]
-            custom_tools_from_ids = await custom_tool_service.get_custom_tools(
-            )
-
-            # Filter by IDs
-            filtered_tools = [
-                tool for tool in custom_tools_from_ids if tool.id in tool_ids
-            ]
 
             # Convert to HTTPTool format
             http_tools = []
-            for tool in filtered_tools:
-                http_tool = custom_tool_service.convert_to_http_tool(tool)
-                http_tools.append(http_tool)
+            for tool_id in tool_ids:
+                tool = custom_tool_service.get_custom_tool(db, tool_id)
+                if not tool:
+                    logger.warning(
+                        f"Custom tool not found: {tool_id} (agent {agent.id})"
+                    )
+                    continue
+                http_tools.append(custom_tool_service.convert_to_http_tool(tool))
 
             # Update config with reconstructed tools
             if "custom_tools" not in config:
@@ -160,6 +164,12 @@ async def _reconstruct_custom_configurations(db: Session, agent: Agent) -> None:
     if reconstructed:
         try:
             agent.config = config
+            # `config` is a plain JSON column, so mutating the dict in place does
+            # not mark the attribute dirty and the commit emits no UPDATE. Worse,
+            # the commit expires the instance, so the caller would then re-read
+            # the *unreconstructed* config straight from the database and see no
+            # tools at all. flag_modified forces the UPDATE.
+            flag_modified(agent, "config")
             db.commit()
             logger.debug(f"Saved reconstructed configurations for agent {agent.id}")
         except Exception as e:
@@ -381,7 +391,7 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
             return None
 
         # Reconstruct custom configurations from saved IDs
-        await _reconstruct_custom_configurations(db, agent)
+        _reconstruct_custom_configurations(db, agent)
 
         # Sanitize agent name if it contains spaces or special characters
         if agent.name and any(c for c in agent.name if not (c.isalnum() or c == "_")):

@@ -33,6 +33,7 @@ import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
+from src.services.adk.custom_tools import strip_modes_meta
 from src.services.adk.tools import exit_loop
 from src.services.adk.tools import create_text_to_speech_tool
 
@@ -51,7 +52,7 @@ class ToolBuilder:
         method = tool_config["method"]
         headers = tool_config.get("headers", {})
         parameters = tool_config.get("parameters", {}) or {}
-        values = tool_config.get("values", {})
+        values = strip_modes_meta(tool_config.get("values"))
         error_handling = tool_config.get("error_handling", {})
 
         path_params = parameters.get("path_params") or {}

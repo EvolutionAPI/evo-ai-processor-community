@@ -29,10 +29,25 @@
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
-from src.schemas.schemas import CustomTool
+from src.models.models import CustomTool
 from typing import List, Optional, Dict, Any
+import uuid
 import logging
 logger = logging.getLogger(__name__)
+
+# Fetch a single custom tool by id
+def get_custom_tool(db: Session, tool_id: uuid.UUID) -> Optional[CustomTool]:
+    """Get a single custom tool by id.
+
+    Synchronous on purpose: the ADK tool builder runs inside the sync request
+    path and calls this without awaiting.
+    """
+
+    try:
+        return db.query(CustomTool).filter(CustomTool.id == tool_id).first()
+    except SQLAlchemyError as e:
+        logger.error(f"Error getting custom tool {tool_id}: {str(e)}")
+        return None
 
 # Fetch custom tools with optional filtering
 async def get_custom_tools(
