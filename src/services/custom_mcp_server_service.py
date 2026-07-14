@@ -31,12 +31,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from fastapi import HTTPException, status
 from src.models.models import CustomMCPServer
-from src.schemas.schemas import CustomMCPDiscoverToolsCreate 
+from src.schemas.schemas import CustomMCPDiscoverToolsCreate
 from typing import List, Optional, Dict, Any
+import time
 import uuid
 import logging
 from src.utils.mcp_discovery import _discover_async
-from src.utils.http import HttpClient, HttpError
 
 logger = logging.getLogger(__name__)
 
@@ -63,59 +63,44 @@ def convert_to_mcp_server_config(custom_server: CustomMCPServer) -> Dict[str, An
 
 
 async def test_custom_mcp_server_connection(
-    custom_server: CustomMCPServer,
+    test_request: CustomMCPDiscoverToolsCreate,
 ) -> Dict[str, Any]:
-    """Test connection to a custom MCP server"""
+    """Test connection to a custom MCP server via MCP handshake.
+
+    EVO-2139: reuses `_discover_async` (Google ADK MCPToolset), which speaks
+    the real MCP protocol (POST JSON-RPC 2.0 `initialize` over Streamable
+    HTTP). The previous implementation did a `GET /health` — a route MCP
+    servers do not expose — and failed for every compliant server.
+    """
+    url = test_request.url or ""
+    start = time.perf_counter()
+
     try:
-        timeout = int(custom_server.timeout) if custom_server.timeout else 30
+        tools = await _discover_async({
+            "url": url,
+            "headers": test_request.headers or {},
+        })
+        elapsed = time.perf_counter() - start
+        tools_count = len(tools)
 
-        # Create HTTP client with custom timeout
-        http_client = HttpClient(timeout=float(timeout))
-        
-        url = (
-            custom_server.url.rstrip("/") + "/health"
-            if not custom_server.url.endswith("/health")
-            else custom_server.url
-        )
-        headers = custom_server.headers or {}
-
-        try:
-            # Try to make a health check request with timing
-            response_data, response_time = await http_client.do_get_json_with_timing(
-                url=url,
-                headers=headers,
-                expected_status=200
-            )
-
-            return {
-                "success": True,
-                "status_code": 200,
-                "response_time": response_time,
-                "url_tested": url,
-                "message": "Connection successful",
-                "data": response_data
-            }
-        except HttpError as http_error:
-            # Handle specific HTTP errors
-            return {
-                "success": False,
-                "error": f"HTTP Error: {http_error.message}",
-                "status_code": http_error.status_code,
-                "url_tested": url,
-            }
-
+        return {
+            "success": True,
+            "status_code": 200,
+            "response_time": elapsed,
+            "url_tested": url,
+            "tools_count": tools_count,
+            "message": f"Connection successful, discovered {tools_count} tools",
+        }
     except Exception as e:
-        # Handle any other errors (timeout, connection, etc.)
+        elapsed = time.perf_counter() - start
         error_message = str(e)
-        if "timeout" in error_message.lower():
-            error_message = "Connection timeout"
-        elif "connection" in error_message.lower():
-            error_message = "Connection error - server unreachable"
-        
+        logger.error(f"MCP test connection failed for {url}: {error_message}")
+
         return {
             "success": False,
             "error": error_message,
             "url_tested": url,
+            "response_time": elapsed,
         }
 
 
