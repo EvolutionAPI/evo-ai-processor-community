@@ -68,14 +68,13 @@ def _iter_permission_checkers(route) -> list[PermissionChecker]:
 # F3 fix: only iterate HTTP methods we author; guard against auto-added HEAD/OPTIONS
 _RELEVANT_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 
-def _route_keys():
+
+def _router_route_keys() -> list[tuple[str, str]]:
+    """Actual (method, path) pairs registered on session_routes.router."""
     keys = []
     for route in session_routes.router.routes:
         for method in getattr(route, "methods", set()) & _RELEVANT_METHODS:
-            key = (method, getattr(route, "path", route.name))
-            if key in API_KEY_AUTH_PATHS:
-                continue
-            keys.append(key)
+            keys.append((method, getattr(route, "path", route.name)))
     return keys
 
 
@@ -90,24 +89,27 @@ def test_router_prefix_invariant():
     )
 
 
-@pytest.mark.parametrize("key", _route_keys())
-def test_every_session_route_has_expected_gate(key):
-    """Every route in session_routes.router must carry a PermissionChecker
-    matching the EXPECTED_GATES table. Regression guard for EVO-2124."""
+# EVO-2124 review M2: parametrize on the STATIC EXPECTED_GATES keys, not on
+# whatever the router happens to expose at collect time. If the router breaks
+# (empty routes, import shim, renamed symbol), the old "iterate router.routes"
+# version silently collected zero cases and the whole guard passed. Now every
+# expected gate becomes a mandatory case — router regression fails loudly.
+@pytest.mark.parametrize("key", sorted(EXPECTED_GATES.keys()))
+def test_every_expected_gate_present(key):
+    """Every entry in EXPECTED_GATES must exist on the router with the right
+    (resource, action). Regression guard for EVO-2124."""
     method, path = key
-    expected = EXPECTED_GATES.get(key)
-    assert expected is not None, (
-        f"Route {method} {path} not in EXPECTED_GATES — new endpoint added "
-        f"without updating the contract. Update EXPECTED_GATES in this test."
-    )
-    expected_resource, expected_action = expected
+    expected_resource, expected_action = EXPECTED_GATES[key]
 
     matches = [
         r for r in session_routes.router.routes
         if method in getattr(r, "methods", set())
         and getattr(r, "path", r.name) == path
     ]
-    assert len(matches) == 1, f"Expected exactly one route for {method} {path}"
+    assert len(matches) == 1, (
+        f"Expected exactly one route for {method} {path}, found {len(matches)} — "
+        f"router refactor removed or duplicated the endpoint."
+    )
     checkers = _iter_permission_checkers(matches[0])
     assert checkers, (
         f"{method} {path}: missing RequirePermission gate — EVO-2124 regression."
@@ -118,6 +120,20 @@ def test_every_session_route_has_expected_gate(key):
     ), (
         f"{method} {path}: expected gate ({expected_resource!r}, "
         f"{expected_action!r}), found {[(c.resource, c.action) for c in checkers]}"
+    )
+
+
+def test_no_unexpected_session_routes():
+    """Any route on the router that is neither in EXPECTED_GATES nor in the
+    API_KEY_AUTH_PATHS allowlist is a new endpoint that slipped in without
+    updating the contract. Force a review."""
+    unknown = [
+        key for key in _router_route_keys()
+        if key not in EXPECTED_GATES and key not in API_KEY_AUTH_PATHS
+    ]
+    assert not unknown, (
+        "New session route(s) added without updating EXPECTED_GATES or "
+        "API_KEY_AUTH_PATHS:\n  - " + "\n  - ".join(f"{m} {p}" for m, p in unknown)
     )
 
 
