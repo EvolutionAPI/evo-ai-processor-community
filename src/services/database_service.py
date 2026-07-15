@@ -28,19 +28,18 @@ class DatabaseService:
     async def get_pool(self) -> asyncpg.Pool:
         """Get or create connection pool."""
         if self._pool is None:
-            # Convert sslmode=require to ssl=require for asyncpg compatibility
-            asyncpg_connection_string = self.connection_string.replace(
-                "?sslmode=require", "?ssl=require"
-            ).replace(
-                "&sslmode=require", "&ssl=require"
-            )
+            # Pass the raw DSN straight to asyncpg: its DSN parser accepts libpq's
+            # `sslmode` natively. Do NOT rewrite it to `ssl=` (what the SQLAlchemy
+            # asyncpg dialect needs) — in a raw DSN asyncpg reads `ssl` as a server
+            # GUC and raises CantChangeRuntimeParamError, which broke sslmode=require.
+            #
             # max_inactive_connection_lifetime retires a pooled connection that
             # has sat idle for longer than this, so it is closed and reopened
             # before Docker Swarm/IPVS reaps the idle conntrack entry (~15 min)
             # and hands out a dead socket. 300s is asyncpg's default; we set it
             # explicitly so the resilience does not depend on an upstream default.
             self._pool = await asyncpg.create_pool(
-                asyncpg_connection_string,
+                self.connection_string,
                 min_size=1,
                 max_size=10,
                 command_timeout=60,
