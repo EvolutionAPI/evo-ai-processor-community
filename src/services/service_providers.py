@@ -68,7 +68,21 @@ def get_async_db_url(db_url: str) -> str:
 # DatabaseSessionService requires async driver (asyncpg)
 db_url = os.getenv("POSTGRES_CONNECTION_STRING")
 async_db_url = get_async_db_url(db_url) if db_url else None
-session_service = DatabaseSessionService(db_url=async_db_url)
+
+# DatabaseSessionService forwards **kwargs straight to create_async_engine, so we
+# harden its pool here. Without this it uses SQLAlchemy defaults (no pre-ping, no
+# recycle) and every agent turn reads/writes the ADK session through it — a
+# connection reaped while idle (Docker Swarm/IPVS drops idle conntrack entries
+# after ~15 min) then surfaces as an intermittent 500 on the next turn.
+# pool_pre_ping revalidates a pooled connection before handing it out, so a dead
+# one is transparently replaced instead of failing the request; pool_recycle
+# retires connections before they can go stale. asyncpg does not accept libpq
+# keepalive params, so pre_ping + recycle are the resilience levers here.
+session_service = DatabaseSessionService(
+    db_url=async_db_url,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+)
 
 
 # Initialize artifacts service using the factory

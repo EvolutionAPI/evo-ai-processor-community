@@ -34,11 +34,17 @@ class DatabaseService:
             ).replace(
                 "&sslmode=require", "&ssl=require"
             )
+            # max_inactive_connection_lifetime retires a pooled connection that
+            # has sat idle for longer than this, so it is closed and reopened
+            # before Docker Swarm/IPVS reaps the idle conntrack entry (~15 min)
+            # and hands out a dead socket. 300s is asyncpg's default; we set it
+            # explicitly so the resilience does not depend on an upstream default.
             self._pool = await asyncpg.create_pool(
                 asyncpg_connection_string,
                 min_size=1,
                 max_size=10,
-                command_timeout=60
+                command_timeout=60,
+                max_inactive_connection_lifetime=300,
             )
         return self._pool
 
