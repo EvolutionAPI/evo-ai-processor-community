@@ -82,11 +82,13 @@ def run_migrations_online() -> None:
     """
     connectable = context.config.attributes.get("connection", None)
     if connectable is None:
-        # Convert sslmode=require to ssl=require for asyncpg compatibility
+        # asyncpg rejects the libpq `sslmode` query param (it uses `ssl`); rewrite
+        # ANY value. The old `=require`-only rewrite left `sslmode=disable` intact
+        # (the Swarm overlay runs sslmode=disable), which crashed alembic at connect
+        # and silently skipped every online migration.
         db_url = context.config.get_main_option("sqlalchemy.url")
-        async_db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
-        async_db_url = async_db_url.replace("?sslmode=require", "?ssl=require")
-        async_db_url = async_db_url.replace("&sslmode=require", "&ssl=require")
+        async_db_url = db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+        async_db_url = async_db_url.replace("?sslmode=", "?ssl=").replace("&sslmode=", "&ssl=")
         connectable = create_async_engine(
             async_db_url,
             poolclass=pool.NullPool,
