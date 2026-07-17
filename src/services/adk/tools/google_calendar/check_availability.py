@@ -11,6 +11,53 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+def _credentials_have_secrets(creds: Optional[Dict[str, Any]]) -> bool:
+    """Check whether credentials contain the fields required to refresh the token."""
+    if not creds:
+        return False
+    return bool(
+        creds.get("refresh_token")
+        and creds.get("client_id")
+        and creds.get("client_secret")
+    )
+
+
+def _load_full_credentials_from_db(agent_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Load the full (unsanitized) Google Calendar credentials for an agent directly
+    from the database.
+
+    The credentials that reach this tool via agent.config.integrations are sanitized
+    (they lack refresh_token/client_id/client_secret), which breaks the token refresh.
+    This reads the complete credentials from evo_core_agent_integrations using a short
+    lived connection, so it does not depend on the request DB session still being open.
+    """
+    import os
+
+    dsn = os.environ.get("POSTGRES_CONNECTION_STRING")
+    if not dsn or not agent_id:
+        return None
+
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(dsn)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT config FROM evo_core_agent_integrations "
+                "WHERE agent_id = %s AND provider = %s LIMIT 1",
+                (str(agent_id), "google_calendar_credentials"),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Failed to load full Google Calendar credentials from DB: {e}")
+        return None
+
+
 def create_check_availability_tool(
     agent_id: Optional[str] = None,
     calendar_config: Optional[Dict[str, Any]] = None,
@@ -90,6 +137,25 @@ def create_check_availability_tool(
                     "message": "Google Calendar credentials not configured for this agent"
                 }
 
+            # The credentials from agent.config.integrations are sanitized (no secrets),
+            # which makes the Google token refresh fail. Load the full credentials from
+            # the database when the secret fields are missing.
+            effective_credentials = credentials_config
+            if not _credentials_have_secrets(effective_credentials):
+                full_creds = _load_full_credentials_from_db(effective_agent_id)
+                if _credentials_have_secrets(full_creds):
+                    effective_credentials = full_creds
+                    logger.info("Loaded full Google Calendar credentials from database")
+                else:
+                    logger.error(
+                        "Google Calendar credentials are missing refresh_token/client_id/"
+                        "client_secret and could not be loaded from the database"
+                    )
+                    return {
+                        "status": "error",
+                        "message": "Google Calendar credentials are incomplete (missing OAuth secrets)"
+                    }
+
             # Parse dates
             try:
                 start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
@@ -140,7 +206,7 @@ def create_check_availability_tool(
             if find_slots:
                 return await _find_available_slots(
                     client,
-                    credentials_config,
+                    effective_credentials,
                     start_dt,
                     end_dt,
                     slot_duration,
@@ -150,7 +216,7 @@ def create_check_availability_tool(
 
             # Otherwise, just check if the specific range is available
             result = await client.check_availability(
-                credentials_config,
+                effective_credentials,
                 start_dt,
                 end_dt,
                 calendar_id
@@ -299,11 +365,58 @@ def create_check_availability_tool(
 
         logger.info(f"Searching slots from {current_day} to {end_day}")
 
+        # Fetch every event for the whole search window in a SINGLE API call and then
+        # test each candidate slot against them in memory. The previous implementation
+        # made one Google API call per candidate slot (dozens of sequential HTTP calls),
+        # which took ~40s+ and blew past the bot runtime's 30s timeout, so the generated
+        # answer was never delivered to the customer.
+        from zoneinfo import ZoneInfo
+        try:
+            tz = ZoneInfo(timezone)
+        except Exception:
+            tz = ZoneInfo("America/Sao_Paulo")
+        utc = ZoneInfo("UTC")
+
+        events_result = await client.check_availability(
+            credentials_config, start_dt, end_dt, calendar_id
+        )
+        if events_result.get("status") == "error":
+            return events_result
+
+        def _to_utc(node):
+            dtv = node.get("dateTime")
+            if dtv:
+                d = datetime.fromisoformat(dtv.replace("Z", "+00:00"))
+                if d.tzinfo is None:
+                    d = d.replace(tzinfo=tz)
+                return d.astimezone(utc)
+            dv = node.get("date")
+            if dv:
+                return datetime.fromisoformat(dv).replace(tzinfo=tz).astimezone(utc)
+            return None
+
+        busy_periods = []
+        for ev in events_result.get("events", []):
+            bs = _to_utc(ev.get("start", {}))
+            be = _to_utc(ev.get("end", {}))
+            if bs and be:
+                busy_periods.append((bs, be))
+
+        logger.info(f"Prefetched {len(busy_periods)} busy events for the whole window (1 API call)")
+
+        def _slot_is_free(s_naive, e_naive):
+            s_utc = s_naive.replace(tzinfo=tz).astimezone(utc)
+            e_utc = e_naive.replace(tzinfo=tz).astimezone(utc)
+            for bs, be in busy_periods:
+                if s_utc < be and e_utc > bs:  # overlap
+                    return False
+            return True
+
         while current_day <= end_day:
             # Get business hours for this day
             day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
             day_name = day_names[current_day.weekday()]
-            day_config = business_hours.get(day_name, {}) if business_hours.get("enabled") else {}
+            day_config = business_hours.get(day_name, {})
 
             logger.debug(f"Checking {day_name} ({current_day.date()}): enabled={day_config.get('enabled') if day_config else False}")
 
@@ -339,15 +452,8 @@ def create_check_availability_tool(
                     slot_start += timedelta(minutes=30)  # Move forward in 30-min increments
                     continue
 
-                # Check availability
-                result = await client.check_availability(
-                    credentials_config,
-                    slot_start,
-                    slot_end,
-                    calendar_id
-                )
-
-                if result["status"] == "success" and result["available"]:
+                # Check availability against the pre-fetched events (in memory, no API call)
+                if _slot_is_free(slot_start, slot_end):
                     available_slots.append({
                         "start": slot_start.isoformat(),
                         "end": slot_end.isoformat(),
