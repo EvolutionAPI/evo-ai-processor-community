@@ -198,6 +198,11 @@ def create_calendar_event_tool(
                 # Config values are directly in calendar_config
                 config = calendar_config
 
+            # EVO-2171: honour the calendar the user picked in the UI
+            # (settings.selectedCalendarId). The config selection is authoritative;
+            # fall back to the tool arg / primary.
+            resolved_calendar_id = (config.get("selectedCalendarId") or "").strip() or calendar_id or "primary"
+
             # Helper to extract value from config (handles both dict and direct values)
             def get_config_value(key: str, default: Any) -> Any:
                 value = config.get(key, default)
@@ -226,7 +231,7 @@ def create_calendar_event_tool(
                     effective_credentials,
                     start_dt,
                     end_dt,
-                    calendar_id
+                    resolved_calendar_id
                 )
 
                 if availability_result["status"] == "error":
@@ -259,7 +264,7 @@ def create_calendar_event_tool(
                 end_time=end_dt,
                 description=description,
                 attendees=attendees,
-                calendar_id=calendar_id
+                calendar_id=resolved_calendar_id
             )
 
             if result["status"] == "error":
