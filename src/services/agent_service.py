@@ -246,8 +246,13 @@ async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], a
         raise AgentValidationError(str(e)) from e
     except Exception as e:
         # Any other unexpected failure is likewise "could not determine", not
-        # "invalid key" -> treat as infrastructure (5xx), never a 401.
-        logger.error(f"Unexpected error validating API key for agent {agent_id}: {str(e)}")
+        # "invalid key" -> treat as infrastructure (5xx), never a 401. This
+        # branch also swallows genuine code bugs into a "retryable" 5xx, so log
+        # the traceback (exc_info) to keep such bugs diagnosable.
+        logger.error(
+            f"Unexpected error validating API key for agent {agent_id}: {str(e)}",
+            exc_info=True,
+        )
         raise AgentValidationError(str(e)) from e
 
 

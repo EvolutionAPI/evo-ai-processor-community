@@ -112,3 +112,49 @@ def test_middleware_still_401_on_invalid_key():
     response, call_next = _run_dispatch(validate)
     assert response.status_code == 401  # genuine auth failure stays 401
     call_next.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# EvoAuthMiddleware main agent-api-key path (an already-validated agent token,
+# NOT the token-fallback above). This is the path named in the incident
+# root-cause, so it gets its own coverage: its 503 relies on the outer
+# `except AgentValidationError`, and a stray inner `except Exception` would
+# silently regress it back to 401 — this test guards against that.
+# --------------------------------------------------------------------------- #
+def _run_dispatch_agent_key_path(validate_mock):
+    from src.middleware.evo_auth import EvoAuthMiddleware
+
+    mw = EvoAuthMiddleware(MagicMock())
+    mw._extract_token = lambda req: ("sometoken", "api_access_token")
+
+    call_next = AsyncMock()
+    auth_response = MagicMock()
+    # Detected as an agent token whose id matches the path -> main agent-key path
+    auth_response.metadata = {"agent_id": AGENT_ID}
+    auth_svc = MagicMock()
+    auth_svc.validate_token = AsyncMock(return_value=auth_response)
+
+    def fake_get_db():
+        yield MagicMock()
+
+    with patch("src.middleware.evo_auth.get_auth_service", return_value=auth_svc), patch(
+        "src.middleware.evo_auth.get_db", new=fake_get_db
+    ), patch("src.services.agent_service.validate_agent_api_key", new=validate_mock):
+        response = asyncio.run(mw.dispatch(_build_request(), call_next))
+    return response, call_next
+
+
+def test_middleware_main_path_returns_503_on_infra_error_not_401():
+    validate = AsyncMock(side_effect=AgentValidationError("server closed the connection"))
+    response, call_next = _run_dispatch_agent_key_path(validate)
+    assert response.status_code == 503  # retryable, NOT a silent 401
+    call_next.assert_not_called()
+
+
+def test_middleware_main_path_still_401_on_invalid_key():
+    validate = AsyncMock(
+        return_value={"valid": False, "agent_id": AGENT_ID, "agent_name": None}
+    )
+    response, call_next = _run_dispatch_agent_key_path(validate)
+    assert response.status_code == 401  # genuine auth failure stays 401
+    call_next.assert_not_called()
