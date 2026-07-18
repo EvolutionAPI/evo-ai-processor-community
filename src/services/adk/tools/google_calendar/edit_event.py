@@ -150,13 +150,20 @@ def create_edit_event_tool(
                         "message": "Google Calendar credentials are incomplete (missing OAuth secrets)",
                     }
 
+            # EVO-2171: operate on the calendar the user picked in the UI
+            # (settings.selectedCalendarId) — the same one create_event/check_availability
+            # use — so edit locates and patches the event on the correct calendar. Fall
+            # back to the tool arg / primary when no calendar is configured.
+            _cfg = calendar_config.get("settings", calendar_config) if calendar_config else {}
+            resolved_calendar_id = (_cfg.get("selectedCalendarId") or "").strip() or calendar_id or "primary"
+
             service = client.get_calendar_service(effective_credentials)
 
             # ---- locate the target event ----
             target = None
             if event_id:
                 try:
-                    target = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+                    target = service.events().get(calendarId=resolved_calendar_id, eventId=event_id).execute()
                 except HttpError as e:
                     return {"status": "error", "message": f"Google Calendar API error: {str(e)}"}
             else:
@@ -175,7 +182,7 @@ def create_edit_event_tool(
                     f"Searching event to edit from {start_dt} to {end_dt} "
                     f"(title={title!r}) in calendar {calendar_id}"
                 )
-                result = await client.check_availability(effective_credentials, start_dt, end_dt, calendar_id)
+                result = await client.check_availability(effective_credentials, start_dt, end_dt, resolved_calendar_id)
                 if result.get("status") == "error":
                     return result
                 events = result.get("events", [])
@@ -228,7 +235,7 @@ def create_edit_event_tool(
 
             try:
                 updated = service.events().patch(
-                    calendarId=calendar_id, eventId=target_id, body=body, sendUpdates="all"
+                    calendarId=resolved_calendar_id, eventId=target_id, body=body, sendUpdates="all"
                 ).execute()
             except HttpError as e:
                 return {"status": "error", "message": f"Google Calendar API error: {str(e)}"}
