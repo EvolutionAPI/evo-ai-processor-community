@@ -149,17 +149,20 @@ def create_cancel_event_tool(
                         "message": "Google Calendar credentials are incomplete (missing OAuth secrets)",
                     }
 
-            # Use the same calendar the create_event tool uses (default "primary").
-            # NOTE: create_event does not override with selectedCalendarId, so cancel must
-            # not either — otherwise it would search a different calendar than the one the
-            # event was created on and never find it.
+            # EVO-2171: operate on the calendar the user picked in the UI
+            # (settings.selectedCalendarId) — the same one create_event/check_availability
+            # use — so cancel searches/deletes on the calendar the event lives on. Fall
+            # back to the tool arg / primary when no calendar is configured.
+            _cfg = calendar_config.get("settings", calendar_config) if calendar_config else {}
+            resolved_calendar_id = (_cfg.get("selectedCalendarId") or "").strip() or calendar_id or "primary"
+
             service = client.get_calendar_service(effective_credentials)
 
             # Direct deletion by id, when provided
             if event_id:
                 try:
                     service.events().delete(
-                        calendarId=calendar_id, eventId=event_id, sendUpdates="all"
+                        calendarId=resolved_calendar_id, eventId=event_id, sendUpdates="all"
                     ).execute()
                     logger.info(f"Cancelled calendar event by id: {event_id}")
                     return {
@@ -191,7 +194,7 @@ def create_cancel_event_tool(
 
             # List events in the window (single API call)
             result = await client.check_availability(
-                effective_credentials, start_dt, end_dt, calendar_id
+                effective_credentials, start_dt, end_dt, resolved_calendar_id
             )
             if result.get("status") == "error":
                 return result
@@ -228,7 +231,7 @@ def create_cancel_event_tool(
             target_id = target.get("id")
             try:
                 service.events().delete(
-                    calendarId=calendar_id, eventId=target_id, sendUpdates="all"
+                    calendarId=resolved_calendar_id, eventId=target_id, sendUpdates="all"
                 ).execute()
             except HttpError as e:
                 return {"status": "error", "message": f"Google Calendar API error: {str(e)}"}

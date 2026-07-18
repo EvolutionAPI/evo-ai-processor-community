@@ -138,3 +138,22 @@ def test_sanitized_credentials_are_reloaded_from_db():
     load_mock.assert_called_once_with(AGENT_ID)
     assert res["status"] == "success"
     gcs.assert_called_once_with(FULL_CREDS)  # full creds used, not sanitized
+
+
+def test_uses_selected_calendar_from_config():
+    # EVO-2171: searches and deletes on settings.selectedCalendarId, not primary.
+    cfg = {"settings": {"timezone": "America/Sao_Paulo", "selectedCalendarId": "mcc@agencia.bid"}}
+    svc = _mock_service()
+    ca = AsyncMock(return_value={"status": "success", "available": False, "events": [_event("evt-1", "R")]})
+    tool = create_cancel_event_tool(
+        agent_id=AGENT_ID, calendar_config=cfg, credentials_config=FULL_CREDS, db=None
+    )
+    with patch.object(GoogleCalendarClient, "get_calendar_service", return_value=svc), patch.object(
+        GoogleCalendarClient, "check_availability", new=ca
+    ):
+        res = asyncio.run(tool(start_date="2026-07-20T00:00:00", end_date="2026-07-20T23:59:59"))
+    assert res["status"] == "success"
+    assert ca.call_args[0][3] == "mcc@agencia.bid"  # search on the selected calendar
+    svc.events.return_value.delete.assert_called_once_with(
+        calendarId="mcc@agencia.bid", eventId="evt-1", sendUpdates="all"
+    )
