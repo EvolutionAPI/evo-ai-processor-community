@@ -189,7 +189,7 @@ def create_cancel_event_tool(
 
             logger.info(
                 f"Searching events to cancel from {start_dt} to {end_dt} "
-                f"(title={title!r}) in calendar {calendar_id}"
+                f"(title={title!r}) in calendar {resolved_calendar_id}"
             )
 
             # List events in the window (single API call)
