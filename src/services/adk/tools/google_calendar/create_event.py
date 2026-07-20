@@ -11,6 +11,53 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
+def _credentials_have_secrets(creds: Optional[Dict[str, Any]]) -> bool:
+    """Check whether credentials contain the fields required to refresh the token."""
+    if not creds:
+        return False
+    return bool(
+        creds.get("refresh_token")
+        and creds.get("client_id")
+        and creds.get("client_secret")
+    )
+
+
+def _load_full_credentials_from_db(agent_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Load the full (unsanitized) Google Calendar credentials for an agent directly
+    from the database.
+
+    The credentials that reach this tool via agent.config.integrations are sanitized
+    (they lack refresh_token/client_id/client_secret), which breaks the token refresh.
+    This reads the complete credentials from evo_core_agent_integrations using a short
+    lived connection, so it does not depend on the request DB session still being open.
+    """
+    import os
+
+    dsn = os.environ.get("POSTGRES_CONNECTION_STRING")
+    if not dsn or not agent_id:
+        return None
+
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(dsn)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT config FROM evo_core_agent_integrations "
+                "WHERE agent_id = %s AND provider = %s LIMIT 1",
+                (str(agent_id), "google_calendar_credentials"),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+    except Exception as e:
+        logger.error(f"Failed to load full Google Calendar credentials from DB: {e}")
+        return None
+
+
 def create_calendar_event_tool(
     agent_id: Optional[str] = None,
     calendar_config: Optional[Dict[str, Any]] = None,
@@ -101,6 +148,25 @@ def create_calendar_event_tool(
                     "message": "Google Calendar credentials not configured for this agent"
                 }
 
+            # Credentials from agent.config.integrations are sanitized (no secrets),
+            # which makes the Google token refresh fail. Load the full credentials from
+            # the database when the secret fields are missing.
+            effective_credentials = credentials_config
+            if not _credentials_have_secrets(effective_credentials):
+                full_creds = _load_full_credentials_from_db(effective_agent_id)
+                if _credentials_have_secrets(full_creds):
+                    effective_credentials = full_creds
+                    logger.info("Loaded full Google Calendar credentials from database")
+                else:
+                    logger.error(
+                        "Google Calendar credentials are missing refresh_token/client_id/"
+                        "client_secret and could not be loaded from the database"
+                    )
+                    return {
+                        "status": "error",
+                        "message": "Google Calendar credentials are incomplete (missing OAuth secrets)"
+                    }
+
             if not title or not title.strip():
                 return {
                     "status": "error",
@@ -132,6 +198,11 @@ def create_calendar_event_tool(
                 # Config values are directly in calendar_config
                 config = calendar_config
 
+            # EVO-2171: honour the calendar the user picked in the UI
+            # (settings.selectedCalendarId). The config selection is authoritative;
+            # fall back to the tool arg / primary.
+            resolved_calendar_id = (config.get("selectedCalendarId") or "").strip() or calendar_id or "primary"
+
             # Helper to extract value from config (handles both dict and direct values)
             def get_config_value(key: str, default: Any) -> Any:
                 value = config.get(key, default)
@@ -157,10 +228,10 @@ def create_calendar_event_tool(
             if check_availability:
                 logger.info(f"Checking availability for {start_date} to {end_date}")
                 availability_result = await client.check_availability(
-                    credentials_config,
+                    effective_credentials,
                     start_dt,
                     end_dt,
-                    calendar_id
+                    resolved_calendar_id
                 )
 
                 if availability_result["status"] == "error":
@@ -186,14 +257,14 @@ def create_calendar_event_tool(
             # Create the event
             logger.info(f"Creating event in Google Calendar")
             result = await client.create_event(
-                credentials_config=credentials_config,
+                credentials_config=effective_credentials,
                 config=config,
                 summary=title,
                 start_time=start_dt,
                 end_time=end_dt,
                 description=description,
                 attendees=attendees,
-                calendar_id=calendar_id
+                calendar_id=resolved_calendar_id
             )
 
             if result["status"] == "error":
