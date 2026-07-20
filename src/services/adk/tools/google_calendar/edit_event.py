@@ -180,7 +180,7 @@ def create_edit_event_tool(
 
                 logger.info(
                     f"Searching event to edit from {start_dt} to {end_dt} "
-                    f"(title={title!r}) in calendar {calendar_id}"
+                    f"(title={title!r}) in calendar {resolved_calendar_id}"
                 )
                 result = await client.check_availability(effective_credentials, start_dt, end_dt, resolved_calendar_id)
                 if result.get("status") == "error":
