@@ -39,7 +39,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# Helper function to generate API keys
+class AgentValidationError(Exception):
+    """Raised when agent API key validation cannot be completed due to an
+    infrastructure error (DB down, dead pooled connection, timeout) — NOT an
+    invalid key. Callers MUST map this to a 5xx (retryable), never to a 401.
+
+    EVO-2166: a transient DB blip used to be swallowed into {"valid": False},
+    which the auth middleware turned into a silent, non-retryable 401 — the
+    customer's message was dropped with no signal that it was transient.
+    """
+
 def generate_api_key() -> str:
     """Generate a secure API key"""
     # Format: sk-proj-{random 64 chars}
@@ -229,9 +238,22 @@ async def validate_agent_api_key(db: Session, agent_id: Union[uuid.UUID, str], a
             "agent_name": agent.name
         }
 
+    except SQLAlchemyError as e:
+        # EVO-2166: infrastructure error (dead pooled connection, DB down/timeout)
+        # is NOT an authentication decision. Surface it as a retryable 5xx instead
+        # of a silent 401 by raising rather than returning {"valid": False}.
+        logger.error(f"Infra error validating API key for agent {agent_id}: {str(e)}")
+        raise AgentValidationError(str(e)) from e
     except Exception as e:
-        logger.error(f"Error validating API key for agent {agent_id}: {str(e)}")
-        return {"valid": False, "agent_id": str(agent_id), "agent_name": None}
+        # Any other unexpected failure is likewise "could not determine", not
+        # "invalid key" -> treat as infrastructure (5xx), never a 401. This
+        # branch also swallows genuine code bugs into a "retryable" 5xx, so log
+        # the traceback (exc_info) to keep such bugs diagnosable.
+        logger.error(
+            f"Unexpected error validating API key for agent {agent_id}: {str(e)}",
+            exc_info=True,
+        )
+        raise AgentValidationError(str(e)) from e
 
 
 async def get_agent_integrations(db: Session, agent_id: Union[uuid.UUID, str]) -> List[Dict[str, Any]]:
