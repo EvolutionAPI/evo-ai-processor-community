@@ -301,11 +301,21 @@ class RunnerUtils:
                         filename=file_data.filename,
                         artifact=file_part,
                     )
+
+                    # EVO-2181: add EVERY file to the content parts so the model
+                    # actually receives it. This append used to be gated behind
+                    # `if is_audio`, so images were blobbed and saved to artifacts
+                    # but never sent to the LLM -> the agent replied
+                    # "No content to process". Images/video/documents must reach
+                    # the model as inline_data just like audio does.
+                    file_parts.append(file_part)
                     if is_audio:
-                        # Audio file - add to content parts for LLM processing
-                        file_parts.append(file_part)
                         logger.info(
                             f"Added audio file {file_data.filename} to content parts for LLM processing"
+                        )
+                    else:
+                        logger.info(
+                            f"Added file {file_data.filename} ({file_data.content_type}) to content parts for LLM processing"
                         )
 
                 except Exception as e:
