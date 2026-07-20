@@ -506,6 +506,7 @@ class ToolBuilder:
                 from src.services.adk.tools.google_calendar import (
                     create_check_availability_tool,
                     create_calendar_event_tool,
+                    create_cancel_event_tool,
                 )
 
                 # Use agent_id from parameter if available, otherwise try to get from config
@@ -534,8 +535,18 @@ class ToolBuilder:
                         )
                     )
 
+                    # Add cancel_event tool with configs from agent.config.integrations
+                    self.tools.append(
+                        create_cancel_event_tool(
+                            agent_id=effective_agent_id,
+                            calendar_config=google_calendar_config,
+                            credentials_config=google_calendar_credentials,
+                            db=db
+                        )
+                    )
+
                     logger.info(
-                        f"Added Google Calendar tools (check_availability, create_event) "
+                        f"Added Google Calendar tools (check_availability, create_event, cancel_event) "
                         f"for agent {effective_agent_id}"
                     )
             except Exception as e:
