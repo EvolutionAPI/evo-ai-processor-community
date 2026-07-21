@@ -274,6 +274,7 @@ class RunnerUtils:
         transcribed_texts = []
 
         if files and len(files) > 0:
+            inlined_bytes = 0
             for file_data in files:
                 try:
                     # Check if file is audio
@@ -293,6 +294,32 @@ class RunnerUtils:
                         )
                     )
 
+                    # EVO-2181: add the file to the content parts so the model
+                    # actually receives it. This append used to be gated behind
+                    # `if is_audio`, so an image was blobbed and saved to the
+                    # artifact store but never handed to the LLM -> the agent
+                    # replied "No content to process".
+                    #
+                    # It runs before save_artifact on purpose: the bytes are
+                    # already in hand, and a failure while storing them must not
+                    # cost the model its copy of the file and bring this very bug
+                    # back.
+                    skip_reason = self._inline_skip_reason(
+                        file_data.content_type, len(file_bytes), inlined_bytes
+                    )
+                    if skip_reason:
+                        logger.warning(
+                            f"File {file_data.filename} ({file_data.content_type}) not sent"
+                            f" to the model: {skip_reason}. Still saved as an artifact."
+                        )
+                    else:
+                        inlined_bytes += len(file_bytes)
+                        file_parts.append(file_part)
+                        logger.info(
+                            f"Added {'audio' if is_audio else 'file'} {file_data.filename}"
+                            f" ({file_data.content_type}) to content parts for LLM processing"
+                        )
+
                     # Always save to artifacts for reference
                     await artifacts_service.save_artifact(
                         app_name=agent_id,
@@ -301,12 +328,6 @@ class RunnerUtils:
                         filename=file_data.filename,
                         artifact=file_part,
                     )
-                    if is_audio:
-                        # Audio file - add to content parts for LLM processing
-                        file_parts.append(file_part)
-                        logger.info(
-                            f"Added audio file {file_data.filename} to content parts for LLM processing"
-                        )
 
                 except Exception as e:
                     logger.error(
@@ -314,6 +335,55 @@ class RunnerUtils:
                     )
 
         return file_parts, transcribed_texts
+
+    # What google-adk can actually turn into a model content part. Its LiteLlm
+    # path (`_get_content`) decodes text/* inline, maps image//audio//video/ to
+    # the matching data-uri part and application/pdf + application/json to a file
+    # part, then raises ValueError on anything else -- and the runner turns that
+    # ValueError into a 500, losing the whole turn, the user's text included.
+    # Mirrored here because it is a private ADK detail; test_media_file_parts
+    # pins the two together against the installed version.
+    _MODEL_READABLE_MIME_PREFIXES = ("text/", "image/", "audio/", "video/")
+    _MODEL_READABLE_MIME_TYPES = frozenset({"application/pdf", "application/json"})
+
+    # Ceilings on what we inline, mirroring the bounds the bot-runtime already
+    # applies when downloading the attachment (ai_adapter.go: maxAttachmentBytes
+    # / maxAttachmentsTotalBytes). Providers reject an oversized inline request,
+    # and that rejection is a 500 here too.
+    MAX_INLINE_FILE_BYTES = 15 * 1024 * 1024
+    MAX_INLINE_REQUEST_BYTES = 20 * 1024 * 1024
+
+    def _inline_skip_reason(
+        self, content_type: str, size_bytes: int, already_inlined: int
+    ) -> Optional[str]:
+        """Why this file must not travel to the model as inline data, or None.
+
+        Skipping is the graceful path: the file is still saved as an artifact and
+        the rest of the message -- text and readable media -- still gets an
+        answer. Forwarding it instead costs the whole turn.
+        """
+        # "audio/webm;codecs=opus" -> "audio/webm". The Blob keeps the content
+        # type verbatim; only the check normalizes.
+        mime_type = (content_type or "").split(";")[0].strip().lower()
+        if not (
+            mime_type.startswith(self._MODEL_READABLE_MIME_PREFIXES)
+            or mime_type in self._MODEL_READABLE_MIME_TYPES
+        ):
+            return "the model layer cannot carry this content type as inline data"
+
+        if size_bytes > self.MAX_INLINE_FILE_BYTES:
+            return (
+                f"{size_bytes} bytes is over the {self.MAX_INLINE_FILE_BYTES} byte"
+                " per-file inline limit"
+            )
+
+        if already_inlined + size_bytes > self.MAX_INLINE_REQUEST_BYTES:
+            return (
+                "it would push this request past the"
+                f" {self.MAX_INLINE_REQUEST_BYTES} byte inline budget"
+            )
+
+        return None
 
     def _is_audio_file(self, content_type: str, filename: str) -> bool:
         """Check if file is an audio file based on content type and extension."""
