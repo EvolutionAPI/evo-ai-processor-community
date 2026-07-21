@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from google.adk.models.lite_llm import _get_content
+from google.genai.types import Blob, Part
 
 from src.schemas.chat import FileData
 from src.services.adk.runners.runner_utils import RunnerUtils
@@ -131,8 +132,42 @@ def test_mime_parameters_do_not_break_the_check():
     parts, _ = _run(
         _utils().process_files([_file("v.webm", "audio/webm;codecs=opus")], _artifacts(), "a", "e", "s")
     )
-    # Normalized for the check, verbatim on the Blob.
+    # The prefix still matches with the parameter attached, and ADK reads the
+    # verbatim value off the Blob, so the two agree.
     assert [p.inline_data.mime_type for p in parts] == ["audio/webm;codecs=opus"]
+
+
+# The guard must judge the mime exactly as ADK will, because ADK is what raises.
+# A check that normalized first would pass these through and turn them into a 500
+# in _get_content -- losing the caption along with the file.
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        "IMAGE/PNG",  # case-sensitive startswith in _get_content
+        "Image/png",
+        "application/pdf; charset=binary",  # exact-match set in _get_content
+        "application/json;charset=utf-8",
+    ],
+)
+def test_mime_adk_would_reject_is_skipped_not_forwarded(content_type):
+    artifacts = _artifacts()
+    parts, _ = _run(_utils().process_files([_file("f.bin", content_type)], artifacts, "a", "e", "s"))
+    assert parts == []
+    artifacts.save_artifact.assert_awaited_once()  # still kept for reference
+
+
+def test_every_skipped_mime_would_really_have_broken_adk():
+    """The mirror is only worth having if it matches ADK's real behaviour.
+
+    Feeds ADK exactly what the guard rejects and asserts it raises, so a future
+    ADK bump that starts accepting these shows up as a failure here instead of as
+    a guard that silently drops media the model could have read.
+    """
+    utils = _utils()
+    for content_type in ["IMAGE/PNG", "application/pdf; charset=binary", DOCX]:
+        part = Part(inline_data=Blob(mime_type=content_type, data=b"bytes"))
+        with pytest.raises(ValueError):
+            _get_content([part])
 
 
 def test_image_survives_an_artifact_store_failure():

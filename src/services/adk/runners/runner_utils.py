@@ -362,9 +362,14 @@ class RunnerUtils:
         the rest of the message -- text and readable media -- still gets an
         answer. Forwarding it instead costs the whole turn.
         """
-        # "audio/webm;codecs=opus" -> "audio/webm". The Blob keeps the content
-        # type verbatim; only the check normalizes.
-        mime_type = (content_type or "").split(";")[0].strip().lower()
+        # Checked verbatim, exactly as ADK will see it on the Blob. Normalizing
+        # first (lowercasing, dropping ";codecs=opus") would answer a question
+        # nobody asks downstream: _get_content matches the raw mime_type, with a
+        # case-sensitive startswith and an exact-match set. So "IMAGE/PNG" and
+        # "application/pdf; charset=binary" would clear a normalized check and
+        # then raise ValueError inside ADK -- a 500 that costs the whole turn,
+        # which is the failure this guard exists to prevent.
+        mime_type = content_type or ""
         if not (
             mime_type.startswith(self._MODEL_READABLE_MIME_PREFIXES)
             or mime_type in self._MODEL_READABLE_MIME_TYPES
