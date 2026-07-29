@@ -7,6 +7,11 @@ from src.schemas.schemas import Agent
 from src.utils.logger import setup_logger
 from src.services.adk.agents.external_agent import ExternalAgent
 from src.services.agent_service import get_agent_integration_by_provider
+from src.services.adk.integration_credentials import (
+    DatabaseCredentialVault,
+    apply_vault_credential,
+)
+from src.utils.crypto import decrypt_api_key
 from sqlalchemy.orm import Session
 
 logger = setup_logger(__name__)
@@ -53,6 +58,16 @@ class ExternalAgentBuilder:
                     f"Integration not found for provider '{provider}'. "
                     "Please configure the integration first."
                 )
+
+            # EVO-2250 story 2.3: when the integration points at the credential
+            # vault, the secret comes from there; otherwise the inline value is
+            # used exactly as before, so nothing breaks before the migration.
+            integration_config = apply_vault_credential(
+                provider,
+                integration_config,
+                vault=DatabaseCredentialVault(self.db),
+                decrypt=decrypt_api_key,
+            )
 
             # Get sub-agents if there are any
             sub_agents = []
