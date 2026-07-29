@@ -426,7 +426,9 @@ class MCPService:
                                     f"Monday MCP: Attempting to discover tools. "
                                     f"URL: {server_config.get('url')}, "
                                     f"Has Authorization header: {bool(server_config.get('headers', {}).get('Authorization'))}, "
-                                    f"All headers: {server_config.get('headers', {})}"
+                                    # Header NAMES only: dumping the map put bearer
+                                    # tokens in the logs (EVO-2250 story 2.4).
+                                    f"Header names: {list(server_config.get('headers', {}).keys())}"
                                 )
                             
                             cached_tools = await mcp_tool_cache.get_server_tools(
@@ -485,7 +487,7 @@ class MCPService:
                             logger.info(
                                 f"Monday MCP: About to connect. "
                                 f"Config: url={server_url}, "
-                                f"headers={server_config.get('headers', {})}, "
+                                f"header_names={list(server_config.get('headers', {}).keys())}, "
                                 f"tool_filter={agent_tools}"
                             )
 
@@ -951,3 +953,28 @@ class MCPService:
         raise DeprecationWarning(
             "build_tools is deprecated and keeps connections open. Use build_lazy_tools instead."
         )
+
+
+def _resolve_mcp_headers(custom_server, db):
+    """Resolves the headers of a remote MCP server against the credential vault.
+
+    A vault outage, or an unresolvable reference with an inline value present,
+    degrades to today's behaviour, so nothing breaks before the 2.6 migration.
+    """
+    headers = custom_server.headers or {}
+    credential_refs = getattr(custom_server, "credential_refs", None) or {}
+    if not credential_refs:
+        return headers
+
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    return resolve_credential_refs(
+        headers,
+        credential_refs,
+        vault=DatabaseCredentialVault(db),
+        decrypt=decrypt_api_key,
+    )

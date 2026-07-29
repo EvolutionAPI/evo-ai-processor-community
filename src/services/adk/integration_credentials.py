@@ -129,6 +129,52 @@ def apply_vault_credential(
     return _merge_secret(resolved, provider, secret_fields, secret, credential_id)
 
 
+def resolve_credential_refs(
+    values: Dict[str, Any],
+    credential_refs: Dict[str, str],
+    vault: CredentialVault,
+    decrypt: Callable[[str], Optional[str]],
+) -> Dict[str, Any]:
+    """Overrides named entries with the secret each one references in the vault.
+
+    Used by custom tools and remote MCP servers (header name -> credential) and
+    by official MCP servers (env var name -> credential). It is a MAP because
+    one credential equals one secret: a tool with two auth headers references
+    two credentials, and a scalar reference could not say which header it
+    replaces.
+
+    An unresolvable reference falls back to the inline value; with no inline
+    value to fall back to it raises, because sending an empty header is a
+    failure that surfaces further away and with a worse message.
+    """
+    resolved = dict(values)
+    if not credential_refs:
+        return resolved
+
+    for name, credential_id in credential_refs.items():
+        if not credential_id:
+            continue
+
+        secret, reason = _fetch_secret(credential_id, vault, decrypt)
+        if secret is None:
+            if resolved.get(name):
+                logger.warning(
+                    "Credential %s for %r could not be resolved (%s); using the inline value",
+                    credential_id,
+                    name,
+                    reason,
+                )
+                continue
+            raise ValueError(
+                f"credential_id {credential_id} referenced by {name!r} could not be "
+                f"resolved ({reason}), and there is no inline value to fall back to"
+            )
+
+        resolved[name] = secret
+
+    return resolved
+
+
 def _fetch_secret(
     credential_id: str,
     vault: CredentialVault,

@@ -304,6 +304,8 @@ class CustomMCPServer(Base):
     description = Column(Text, nullable=True)
     url = Column(String, nullable=False)
     headers = Column(JSON, nullable=False, default={})
+    # Vault references: header name -> credential id (EVO-2250 story 2.4).
+    credential_refs = Column(JSON, nullable=False, default={})
     timeout = Column(String, nullable=False, default="30")
     retry_count = Column(String, nullable=False, default="3")
     tags = Column(JSON, nullable=False, default=[])
@@ -335,6 +337,8 @@ class CustomTool(Base):
     method = Column(String, nullable=False)
     endpoint = Column(String, nullable=False)
     headers = Column(JSON, nullable=False, default={})
+    # Vault references: header name -> credential id (EVO-2250 story 2.4).
+    credential_refs = Column(JSON, nullable=False, default={})
     path_params = Column(JSON, nullable=False, default={})
     query_params = Column(JSON, nullable=False, default={})
     body_params = Column(JSON, nullable=False, default={})

@@ -134,11 +134,14 @@ async def mcp_context(
         args = server_cfg.get("args", [])
         env = server_cfg.get("env", {})
 
-        # Adds environment variables if specified
-        if env:
-            for key, value in env.items():
-                os.environ[key] = value
-
+        # The env vars go to the CHILD process only, through StdioServerParameters.
+        #
+        # They used to also be written into the processor's own os.environ, which
+        # was redundant (the env= below already reaches the subprocess) and never
+        # undone: one agent's token leaked into every MCP subprocess spawned
+        # afterwards, and across tenants in the enterprise build. Removed in
+        # EVO-2250 story 2.4, since this is the very point where vault-resolved
+        # secrets now pass through.
         params = StdioServerParameters(command=command, args=args, env=env)
 
     try:
