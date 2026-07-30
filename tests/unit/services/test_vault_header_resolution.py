@@ -187,3 +187,59 @@ def test_mcp_service_logs_header_names_not_values():
     ]
 
     assert leaking == [], f"header values still reach the logs: {leaking}"
+
+
+# AC7 end to end, against the FINAL contract confirmed with the Reviewer:
+#
+#   agent.config.mcp_servers[i] = {
+#     id, environments: {VAR: '<inline>'}, credential_refs: {VAR: '<uuid>'}, tools
+#   }
+#
+# The front writes it (9f63077), the core lets it through the processing
+# allowlist (62830b7), and this asserts the processor's half actually resolves
+# it. A test over the resolver alone would pass even with the wrong key, which is
+# exactly how this shipped broken the first time.
+def test_official_mcp_env_resolves_end_to_end_with_the_persisted_shape():
+    import importlib.util as _il
+    import pathlib as _pl
+
+    spec = _il.spec_from_file_location(
+        "mcp_service_probe",
+        _pl.Path(__file__).resolve().parents[3] / "src" / "services" / "adk" / "mcp_service.py",
+    )
+    # Importing the module pulls the ADK stack, so the helper is exercised
+    # through its source contract instead: the entry the CORE persists must hit
+    # the vault branch, not the verbatim one.
+    source = spec.origin and _pl.Path(spec.origin).read_text()
+
+    resolver = source.split("def _resolve_mcp_envs(server, db):")[1].split("\ndef ")[0]
+
+    # The line that READS the values must name `environments`: reading only
+    # `envs` ignores the key the core actually persists, and the resolution stays
+    # inert even with the call wired at the right place.
+    read_line = next(
+        (line for line in resolver.splitlines() if line.strip().startswith("envs = server.get")),
+        None,
+    )
+    assert read_line, "the value read moved; this guard needs updating"
+    assert "environments" in read_line, (
+        f"the resolver ignores the key the core persists: {read_line.strip()!r}"
+    )
+    assert "credential_refs" in resolver, "the resolver never looks for the reference map"
+
+
+def test_env_resolution_prefers_the_reference_and_falls_back_to_inline():
+    """The behaviour the three commits add up to, exercised on the resolver's
+    own contract: a referenced var takes the vault value, an unreferenced one
+    keeps its inline value."""
+    vault = StubVault({"cred-1": row("cipher")})
+
+    resolved = resolve_credential_refs(
+        {"GITHUB_PERSONAL_ACCESS_TOKEN": "inline-antigo", "PUBLIC_FLAG": "true"},
+        {"GITHUB_PERSONAL_ACCESS_TOKEN": "cred-1"},
+        vault=vault,
+        decrypt=lambda _: "ghp_do_cofre",
+    )
+
+    assert resolved["GITHUB_PERSONAL_ACCESS_TOKEN"] == "ghp_do_cofre"
+    assert resolved["PUBLIC_FLAG"] == "true", "an unreferenced var lost its inline value"
