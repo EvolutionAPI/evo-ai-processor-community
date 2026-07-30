@@ -980,10 +980,8 @@ def _resolve_mcp_envs(server, db):
     An env var with no reference is copied verbatim, exactly as before: the
     inline value is the fallback until story 2.7 retires it.
 
-    ⚠️ WRITER PENDING: nothing persists `credential_refs` on the agent's MCP
-    entry yet (that is the front's half of AC7). Until it does, every install
-    takes the verbatim path and this is a no-op — the read side is landed so the
-    resolution is not a second dead helper, but AC7 is NOT closed by this alone.
+    The writer is MCPConfigDialog on the front; the core carries the map through
+    `processMCPServers`, whose allowlist would otherwise drop it.
     """
     # `environments` is what the pipeline persists; `envs` is tolerated for any
     # entry written before the naming was reconciled.
