@@ -40,6 +40,43 @@ from src.services.adk.tools import create_text_to_speech_tool
 logger = setup_logger(__name__)
 
 
+
+
+def _nexus_credential_ref(config):
+    """Adapts the Nexus dialog's scalar credential_id to the map shape the tool
+    and MCP paths use."""
+    credential_id = config.get("credential_id")
+    return {"nexus_api_key": credential_id} if credential_id else {}
+
+def _apply_vault_refs(tool_config, headers, _db=None):
+    """Resolves headers that point at the credential vault.
+
+    Opens its own short-lived session because neither tool builder carries one.
+    Any failure falls back to the inline headers, so a vault outage degrades to
+    today's behaviour instead of breaking the tool.
+    """
+    credential_refs = tool_config.get("credential_refs") or {}
+    if not credential_refs:
+        return headers
+
+    from src.config.database import SessionLocal
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    session = SessionLocal()
+    try:
+        return resolve_credential_refs(
+            headers,
+            credential_refs,
+            vault=DatabaseCredentialVault(session),
+            decrypt=decrypt_api_key,
+        )
+    finally:
+        session.close()
+
 class ToolBuilder:
     def __init__(self):
         self.tools = []
@@ -51,6 +88,9 @@ class ToolBuilder:
         endpoint = tool_config["endpoint"]
         method = tool_config["method"]
         headers = tool_config.get("headers", {})
+        # Second header-injection path: hardening only one of the two would
+        # leave the other echoing inline secrets.
+        headers = _apply_vault_refs(tool_config, headers)
         parameters = tool_config.get("parameters", {}) or {}
         values = strip_modes_meta(tool_config.get("values"))
         error_handling = tool_config.get("error_handling", {})
@@ -423,6 +463,13 @@ class ToolBuilder:
                     knowledge_nexus_config.get("nexus_api_key")
                     or knowledge_nexus_config.get("apiKey")
                 )
+                # Only the key goes to the vault: nexus_base_url and space_id
+                # are the address, and keeping them out is what lets one
+                # credential serve agents pointing at different spaces.
+                api_key = _apply_vault_refs(
+                    {"credential_refs": _nexus_credential_ref(knowledge_nexus_config)},
+                    {"nexus_api_key": api_key},
+                ).get("nexus_api_key")
                 space_id = (
                     knowledge_nexus_config.get("space_id")
                     or knowledge_nexus_config.get("spaceId")

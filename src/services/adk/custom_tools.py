@@ -61,6 +61,36 @@ def exit_loop(tool_context: ToolContext):
     return {}
 
 
+
+def _apply_vault_refs(tool_config, headers, _db=None):
+    """Resolves headers that point at the credential vault.
+
+    Opens its own short-lived session because neither tool builder carries one.
+    Any failure falls back to the inline headers, so a vault outage degrades to
+    today's behaviour instead of breaking the tool.
+    """
+    credential_refs = tool_config.get("credential_refs") or {}
+    if not credential_refs:
+        return headers
+
+    from src.config.database import SessionLocal
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    session = SessionLocal()
+    try:
+        return resolve_credential_refs(
+            headers,
+            credential_refs,
+            vault=DatabaseCredentialVault(session),
+            decrypt=decrypt_api_key,
+        )
+    finally:
+        session.close()
+
 class CustomToolBuilder:
     def __init__(self):
         self.tools = []
@@ -72,6 +102,9 @@ class CustomToolBuilder:
         endpoint = tool_config["endpoint"]
         method = tool_config["method"]
         headers = tool_config.get("headers", {})
+        # A header pointing at the vault takes its value from there; the inline
+        # one stays the fallback.
+        headers = _apply_vault_refs(tool_config, headers)
         parameters = tool_config.get("parameters", {}) or {}
         values = strip_modes_meta(tool_config.get("values"))
         error_handling = tool_config.get("error_handling", {})

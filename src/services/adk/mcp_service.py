@@ -383,11 +383,14 @@ class MCPService:
                             logger.warning(f"Failed to load configuration for MCP server: {server_name or server_id}")
                             continue
 
-                        # Process environment variables if provided
-                        if server.get("envs"):
+                        # ⚠️ The key is `environments`, not `envs`: the screen
+                        # writes `environments` and the core persists the entry
+                        # as {id, environments, tools}, so a guard on `envs`
+                        # never fires for an agent configured through the UI.
+                        if server.get("environments") or server.get("envs"):
                             if "env" not in server_config:
                                 server_config["env"] = {}
-                            server_config["env"].update(server.get("envs", {}))
+                            server_config["env"].update(_resolve_mcp_envs(server, db))
 
                         # Get tools from server_config (which comes from integration config) 
                         # or fallback to server.get("tools") for backward compatibility
@@ -426,7 +429,9 @@ class MCPService:
                                     f"Monday MCP: Attempting to discover tools. "
                                     f"URL: {server_config.get('url')}, "
                                     f"Has Authorization header: {bool(server_config.get('headers', {}).get('Authorization'))}, "
-                                    f"All headers: {server_config.get('headers', {})}"
+                                    # Header NAMES only: dumping the map put bearer
+                                    # tokens in the logs.
+                                    f"Header names: {list(server_config.get('headers', {}).keys())}"
                                 )
                             
                             cached_tools = await mcp_tool_cache.get_server_tools(
@@ -485,7 +490,7 @@ class MCPService:
                             logger.info(
                                 f"Monday MCP: About to connect. "
                                 f"Config: url={server_url}, "
-                                f"headers={server_config.get('headers', {})}, "
+                                f"header_names={list(server_config.get('headers', {}).keys())}, "
                                 f"tool_filter={agent_tools}"
                             )
 
@@ -738,10 +743,12 @@ class MCPService:
                             )
                             continue
 
-                        # Convert to the format expected by mcp_context
+                        # A credential_refs entry replaces the header of the
+                        # same name with the decrypted secret; the inline header
+                        # stays the fallback.
                         server_config = {
                             "url": custom_server.url,
-                            "headers": custom_server.headers or {},
+                            "headers": _resolve_mcp_headers(custom_server, db),
                         }
 
                         logger.info(
@@ -951,3 +958,56 @@ class MCPService:
         raise DeprecationWarning(
             "build_tools is deprecated and keeps connections open. Use build_lazy_tools instead."
         )
+
+
+def _resolve_mcp_envs(server, db):
+    """Resolves the env vars of an OFFICIAL MCP server against the vault.
+
+    The reference map lives on the AGENT's entry because the catalog column
+    `evo_core_mcp_servers.environments` is a schema of REQUIRED KEYS, never a
+    value. An env var with no reference is copied verbatim.
+    """
+    # `environments` is what the pipeline persists; `envs` is tolerated for any
+    # entry written before the naming was reconciled.
+    envs = server.get("environments") or server.get("envs") or {}
+    credential_refs = server.get("credential_refs", {}) or {}
+    if not credential_refs:
+        return envs
+
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    return resolve_credential_refs(
+        envs,
+        credential_refs,
+        vault=DatabaseCredentialVault(db),
+        decrypt=decrypt_api_key,
+    )
+
+
+def _resolve_mcp_headers(custom_server, db):
+    """Resolves the headers of a remote MCP server against the credential vault.
+
+    A vault outage, or an unresolvable reference with an inline value present,
+    degrades to today's behaviour, so nothing breaks before the 2.6 migration.
+    """
+    headers = custom_server.headers or {}
+    credential_refs = getattr(custom_server, "credential_refs", None) or {}
+    if not credential_refs:
+        return headers
+
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    return resolve_credential_refs(
+        headers,
+        credential_refs,
+        vault=DatabaseCredentialVault(db),
+        decrypt=decrypt_api_key,
+    )
