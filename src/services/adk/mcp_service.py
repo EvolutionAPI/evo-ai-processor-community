@@ -383,11 +383,14 @@ class MCPService:
                             logger.warning(f"Failed to load configuration for MCP server: {server_name or server_id}")
                             continue
 
-                        # Process environment variables if provided
+                        # Process environment variables if provided.
+                        #
+                        # An env var whose value lives in the vault is resolved
+                        # here; anything without a reference is copied as before.
                         if server.get("envs"):
                             if "env" not in server_config:
                                 server_config["env"] = {}
-                            server_config["env"].update(server.get("envs", {}))
+                            server_config["env"].update(_resolve_mcp_envs(server, db))
 
                         # Get tools from server_config (which comes from integration config) 
                         # or fallback to server.get("tools") for backward compatibility
@@ -740,10 +743,15 @@ class MCPService:
                             )
                             continue
 
-                        # Convert to the format expected by mcp_context
+                        # Convert to the format expected by mcp_context.
+                        #
+                        # The headers go through the vault resolver: a
+                        # credential_refs entry replaces the header of the same
+                        # name with the decrypted secret, and the inline header
+                        # stays the fallback until story 2.7 retires it.
                         server_config = {
                             "url": custom_server.url,
-                            "headers": custom_server.headers or {},
+                            "headers": _resolve_mcp_headers(custom_server, db),
                         }
 
                         logger.info(
@@ -953,6 +961,41 @@ class MCPService:
         raise DeprecationWarning(
             "build_tools is deprecated and keeps connections open. Use build_lazy_tools instead."
         )
+
+
+def _resolve_mcp_envs(server, db):
+    """Resolves the env vars of an OFFICIAL MCP server against the vault.
+
+    The reference map lives on the AGENT's server entry, keyed by env var name,
+    because the catalog column `evo_core_mcp_servers.environments` is a schema of
+    REQUIRED KEYS and never a value (story 2.4). So the vault plugs in on the
+    agent end, which is also where the per-agent values already come from.
+
+    An env var with no reference is copied verbatim, exactly as before: the
+    inline value is the fallback until story 2.7 retires it.
+
+    ⚠️ WRITER PENDING: nothing persists `credential_refs` on the agent's MCP
+    entry yet (that is the front's half of AC7). Until it does, every install
+    takes the verbatim path and this is a no-op — the read side is landed so the
+    resolution is not a second dead helper, but AC7 is NOT closed by this alone.
+    """
+    envs = server.get("envs", {}) or {}
+    credential_refs = server.get("credential_refs", {}) or {}
+    if not credential_refs:
+        return envs
+
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    return resolve_credential_refs(
+        envs,
+        credential_refs,
+        vault=DatabaseCredentialVault(db),
+        decrypt=decrypt_api_key,
+    )
 
 
 def _resolve_mcp_headers(custom_server, db):
