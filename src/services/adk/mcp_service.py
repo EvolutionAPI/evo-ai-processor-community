@@ -387,7 +387,13 @@ class MCPService:
                         #
                         # An env var whose value lives in the vault is resolved
                         # here; anything without a reference is copied as before.
-                        if server.get("envs"):
+                        # ⚠️ The key is `environments`, not `envs`: the screen
+                        # writes `environments` and the core rewrites the
+                        # persisted entry as {id, environments, tools}
+                        # (config_processor.go:266,278-282). A guard on `envs`
+                        # never fires for an agent configured through the UI, and
+                        # the resolution below would stay inert.
+                        if server.get("environments") or server.get("envs"):
                             if "env" not in server_config:
                                 server_config["env"] = {}
                             server_config["env"].update(_resolve_mcp_envs(server, db))
@@ -979,7 +985,9 @@ def _resolve_mcp_envs(server, db):
     takes the verbatim path and this is a no-op — the read side is landed so the
     resolution is not a second dead helper, but AC7 is NOT closed by this alone.
     """
-    envs = server.get("envs", {}) or {}
+    # `environments` is what the pipeline persists; `envs` is tolerated for any
+    # entry written before the naming was reconciled.
+    envs = server.get("environments") or server.get("envs") or {}
     credential_refs = server.get("credential_refs", {}) or {}
     if not credential_refs:
         return envs

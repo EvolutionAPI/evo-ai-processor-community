@@ -72,7 +72,7 @@ def test_official_mcp_env_is_resolved_through_the_vault(source: str) -> None:
     once the writer exists.
     """
     match = re.search(
-        r"if server\.get\(\"envs\"\):(?P<body>.*?)\n\n",
+        r"if \"env\" not in server_config:(?P<body>.*?)\n\n",
         source,
         re.S,
     )
@@ -115,4 +115,34 @@ def test_masking_covers_every_non_safe_header_name(context_source: str) -> None:
     )
     assert 'key.lower() == "authorization"' not in context_source, (
         "the single-name heuristic is still there, so other auth headers leak"
+    )
+
+
+# Review of the Reviewer's own half: the env var key on the AGENT's MCP entry is
+# `environments`, not `envs`.
+#
+# Evidence across the pipeline: the front's MCPConfigDialog writes
+# `environments`, and the core validates and REWRITES the persisted entry with
+# exactly {id, environments, tools} (config_processor.go:266,278-282). So a
+# guard on `envs` never fires for an agent configured through the screen, and the
+# resolution stayed inert even with the call wired.
+def test_env_resolution_reads_the_key_the_pipeline_actually_writes(source: str) -> None:
+    guard = re.search(
+        r"(?P<cond>if server\.get\([^\n]*\n?[^\n]*\):)\s*\n\s*if \"env\" not in server_config",
+        source,
+    )
+    assert guard, "the env guard moved; this test needs updating"
+
+    assert "environments" in guard.group("cond"), (
+        "the guard reads a key the pipeline never persists: "
+        f"got {guard.group('cond')!r}, and the core writes 'environments'"
+    )
+
+
+def test_env_resolver_reads_environments_too(source: str) -> None:
+    body = re.search(r"def _resolve_mcp_envs\(server, db\):(?P<body>.*?)\ndef ", source, re.S)
+    assert body, "_resolve_mcp_envs moved; this test needs updating"
+
+    assert "environments" in body.group("body"), (
+        "_resolve_mcp_envs reads only 'envs', which the pipeline never writes"
     )
