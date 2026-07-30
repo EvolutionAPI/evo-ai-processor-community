@@ -1,20 +1,13 @@
-"""Resolves an external agent's credential from the integration vault.
+"""Resolves a consumer's credential from the integration vault, which holds the
+secret encrypted and is pointed at by `credential_id`.
 
-EVO-2250, story 2.3. The vault (`evo_core_integration_credentials`, story 2.1)
-holds the secret encrypted; the agent's integration config points at it by
-`credential_id`.
+Two rules this module keeps: resolution is BY ID only, because precedence
+between scopes has a single owner in the CRM resolver; and the inline value
+stays the fallback, so an unresolvable reference only fails when there is
+nothing to fall back to.
 
-Two rules this module exists to keep:
-
-1. **Resolution here is BY ID only.** Precedence between scopes has a single
-   owner, the CRM resolver of story 2.2. Walking a chain here would create a
-   second truth about which credential wins.
-2. **The inline value stays the fallback.** Nothing breaks before the 2.6
-   migration runs: an unresolvable reference falls back to the inline secret,
-   and only fails when there is nothing to fall back to.
-
-Deliberately free of heavy imports so it can be unit tested without the ADK
-stack, and the database and crypto handles are injected by the caller.
+Free of heavy imports so it can be unit tested without the ADK stack; the
+database and crypto handles are injected by the caller.
 """
 
 import json
@@ -30,10 +23,9 @@ VALUE_FORMAT_COMPOSITE = "composite"
 COMPOSITE_SECRET_FIELD = "password"
 COMPOSITE_PUBLIC_FIELD = "user"
 
-# Which config field each provider reads its secret from. The provider services
-# keep their current shape, so the vault value is merged into the field they
-# already know: mismatching a name here produces empty auth silently instead of
-# an error, which is why every entry is asserted in the tests.
+# Which config field each provider reads its secret from. A name that does not
+# match produces empty auth silently instead of an error, so every entry is
+# asserted in the tests.
 SECRET_FIELDS_BY_PROVIDER: Dict[str, Tuple[str, ...]] = {
     "dify": ("apiKey",),
     "flowise": ("apiKey",),
@@ -55,9 +47,8 @@ class CredentialVault(Protocol):
 class DatabaseCredentialVault:
     """Reads the vault through the session the caller already has.
 
-    Parameterized and scoped to one row: it deliberately does NOT open its own
-    connection, unlike the raw-psycopg2 pattern some tools use, which bypasses
-    both the ORM and the tenant GUC.
+    Parameterized and scoped to one row; it does NOT open its own connection,
+    unlike the raw-psycopg2 pattern that bypasses the ORM and the tenant GUC.
     """
 
     def __init__(self, db):
@@ -94,9 +85,9 @@ def apply_vault_credential(
     """Returns a config whose secret fields come from the vault when a usable
     reference is present, and from the inline value otherwise.
 
-    Raises ValueError only when the caller asked for a vault credential, it
-    could not be resolved, and there is no inline value to use: sending an empty
-    secret to the provider would fail further away, with a worse message.
+    Raises only when a vault credential was asked for, could not be resolved,
+    and there is nothing inline: an empty secret fails further away, with a
+    worse message.
     """
     resolved = dict(config)
 
@@ -137,15 +128,12 @@ def resolve_credential_refs(
 ) -> Dict[str, Any]:
     """Overrides named entries with the secret each one references in the vault.
 
-    Used by custom tools and remote MCP servers (header name -> credential) and
-    by official MCP servers (env var name -> credential). It is a MAP because
-    one credential equals one secret: a tool with two auth headers references
-    two credentials, and a scalar reference could not say which header it
-    replaces.
+    A MAP because one credential is one secret: a tool with two auth headers
+    references two, and a scalar could not say which header it replaces. Used
+    for tool and MCP headers, and for official MCP env vars.
 
-    An unresolvable reference falls back to the inline value; with no inline
-    value to fall back to it raises, because sending an empty header is a
-    failure that surfaces further away and with a worse message.
+    An unresolvable reference falls back to the inline value, and raises when
+    there is none.
     """
     resolved = dict(values)
     if not credential_refs:

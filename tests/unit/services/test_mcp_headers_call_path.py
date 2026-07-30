@@ -1,14 +1,8 @@
 """The CALL PATH of vault header resolution for remote MCP servers.
 
-EVO-2250, review of 2026-07-29 (blocker 1). `_resolve_mcp_headers` existed,
-was unit tested, and had ZERO callers: `git grep` returned only its definition.
-The real assembly point built `{"url": ..., "headers": custom_server.headers}`
-raw, so a remote MCP configured with `credential_refs` and no inline header went
-out UNAUTHENTICATED.
-
-These tests assert on the SOURCE of the assembly point, not on the function.
-A unit test over the function is exactly what let the defect ship: it passed
-while nothing called it.
+These assert on the SOURCE of the assembly point, not on the resolver. A
+resolver with no caller passes its own unit tests while a remote MCP configured
+with `credential_refs` and no inline header goes out UNAUTHENTICATED.
 """
 
 import pathlib
@@ -66,10 +60,8 @@ def test_the_resolver_has_a_caller_outside_its_own_definition(source: str) -> No
 
 
 def test_official_mcp_env_is_resolved_through_the_vault(source: str) -> None:
-    """Blocker 2: env vars of an official MCP server used to be copied verbatim.
-
-    The read side must go through the resolver so a vault reference is honoured
-    once the writer exists.
+    """The env vars of an official MCP server must go through the resolver, not
+    be copied verbatim, or a vault reference is never honoured.
     """
     match = re.search(
         r"if \"env\" not in server_config:(?P<body>.*?)\n\n",
@@ -118,14 +110,10 @@ def test_masking_covers_every_non_safe_header_name(context_source: str) -> None:
     )
 
 
-# Review of the Reviewer's own half: the env var key on the AGENT's MCP entry is
-# `environments`, not `envs`.
-#
-# Evidence across the pipeline: the front's MCPConfigDialog writes
-# `environments`, and the core validates and REWRITES the persisted entry with
-# exactly {id, environments, tools} (config_processor.go:266,278-282). So a
-# guard on `envs` never fires for an agent configured through the screen, and the
-# resolution stayed inert even with the call wired.
+# The env var key on the AGENT's MCP entry is `environments`, not `envs`: the
+# front writes `environments` and the core rewrites the persisted entry as
+# exactly {id, environments, tools}. A guard on `envs` never fires for an agent
+# configured through the screen, leaving the resolution inert even when wired.
 def test_env_resolution_reads_the_key_the_pipeline_actually_writes(source: str) -> None:
     guard = re.search(
         r"(?P<cond>if server\.get\([^\n]*\n?[^\n]*\):)\s*\n\s*if \"env\" not in server_config",

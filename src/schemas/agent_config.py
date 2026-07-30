@@ -70,7 +70,7 @@ class MCPServerConfig(BaseModel):
     environments: Dict[str, str] = Field(
         default_factory=dict, description="Environment variables of the server"
     )
-    # Vault references, keyed by env var name (EVO-2250 story 2.4 AC7).
+    # Vault references, keyed by env var name.
     credential_refs: Dict[str, str] = Field(
         default_factory=dict, description="Vault credential ids by env var name"
     )

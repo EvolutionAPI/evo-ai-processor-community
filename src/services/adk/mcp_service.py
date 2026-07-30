@@ -383,16 +383,10 @@ class MCPService:
                             logger.warning(f"Failed to load configuration for MCP server: {server_name or server_id}")
                             continue
 
-                        # Process environment variables if provided.
-                        #
-                        # An env var whose value lives in the vault is resolved
-                        # here; anything without a reference is copied as before.
                         # ⚠️ The key is `environments`, not `envs`: the screen
-                        # writes `environments` and the core rewrites the
-                        # persisted entry as {id, environments, tools}
-                        # (config_processor.go:266,278-282). A guard on `envs`
-                        # never fires for an agent configured through the UI, and
-                        # the resolution below would stay inert.
+                        # writes `environments` and the core persists the entry
+                        # as {id, environments, tools}, so a guard on `envs`
+                        # never fires for an agent configured through the UI.
                         if server.get("environments") or server.get("envs"):
                             if "env" not in server_config:
                                 server_config["env"] = {}
@@ -436,7 +430,7 @@ class MCPService:
                                     f"URL: {server_config.get('url')}, "
                                     f"Has Authorization header: {bool(server_config.get('headers', {}).get('Authorization'))}, "
                                     # Header NAMES only: dumping the map put bearer
-                                    # tokens in the logs (EVO-2250 story 2.4).
+                                    # tokens in the logs.
                                     f"Header names: {list(server_config.get('headers', {}).keys())}"
                                 )
                             
@@ -749,12 +743,9 @@ class MCPService:
                             )
                             continue
 
-                        # Convert to the format expected by mcp_context.
-                        #
-                        # The headers go through the vault resolver: a
-                        # credential_refs entry replaces the header of the same
-                        # name with the decrypted secret, and the inline header
-                        # stays the fallback until story 2.7 retires it.
+                        # A credential_refs entry replaces the header of the
+                        # same name with the decrypted secret; the inline header
+                        # stays the fallback.
                         server_config = {
                             "url": custom_server.url,
                             "headers": _resolve_mcp_headers(custom_server, db),
@@ -972,16 +963,9 @@ class MCPService:
 def _resolve_mcp_envs(server, db):
     """Resolves the env vars of an OFFICIAL MCP server against the vault.
 
-    The reference map lives on the AGENT's server entry, keyed by env var name,
-    because the catalog column `evo_core_mcp_servers.environments` is a schema of
-    REQUIRED KEYS and never a value (story 2.4). So the vault plugs in on the
-    agent end, which is also where the per-agent values already come from.
-
-    An env var with no reference is copied verbatim, exactly as before: the
-    inline value is the fallback until story 2.7 retires it.
-
-    The writer is MCPConfigDialog on the front; the core carries the map through
-    `processMCPServers`, whose allowlist would otherwise drop it.
+    The reference map lives on the AGENT's entry because the catalog column
+    `evo_core_mcp_servers.environments` is a schema of REQUIRED KEYS, never a
+    value. An env var with no reference is copied verbatim.
     """
     # `environments` is what the pipeline persists; `envs` is tolerated for any
     # entry written before the naming was reconciled.

@@ -1,4 +1,4 @@
-"""Vault resolution for tool and MCP headers and env vars (EVO-2250, story 2.4).
+"""Vault resolution for tool and MCP headers and env vars.
 
 Same rule as story 2.3: resolution here is BY ID, the inline value stays the
 fallback, and precedence between scopes has a single owner in the CRM.
@@ -140,7 +140,7 @@ def test_the_original_map_is_never_mutated():
 
 
 def test_mcp_context_no_longer_pollutes_os_environ():
-    """Negative proof for the os.environ leak (story 2.4 chose to FIX it).
+    """Negative proof for the os.environ leak.
 
     Each MCP env var used to be written into the processor's own os.environ, on
     top of being passed to the child. The write was redundant and never undone,
@@ -189,16 +189,15 @@ def test_mcp_service_logs_header_names_not_values():
     assert leaking == [], f"header values still reach the logs: {leaking}"
 
 
-# AC7 end to end, against the FINAL contract confirmed with the Reviewer:
+# The end-to-end contract for an official MCP server:
 #
 #   agent.config.mcp_servers[i] = {
 #     id, environments: {VAR: '<inline>'}, credential_refs: {VAR: '<uuid>'}, tools
 #   }
 #
-# The front writes it (9f63077), the core lets it through the processing
-# allowlist (62830b7), and this asserts the processor's half actually resolves
-# it. A test over the resolver alone would pass even with the wrong key, which is
-# exactly how this shipped broken the first time.
+# The front writes it, the core carries it through the processing allowlist, and
+# this asserts the processor resolves it. A test over the resolver alone passes
+# even with the wrong key.
 def test_official_mcp_env_resolves_end_to_end_with_the_persisted_shape():
     import importlib.util as _il
     import pathlib as _pl

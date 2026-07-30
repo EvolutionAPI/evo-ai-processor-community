@@ -45,10 +45,9 @@ logger = setup_logger(__name__)
 MCP_CONNECTION_TIMEOUT = settings.MCP_CONNECTION_TIMEOUT
 
 
-# Header names whose VALUE is safe to log. Mirrors `safeHeaderNames` in the Go
-# secretmerge package: the map is free-form, so a denylist of auth-looking names
-# misses `X-API-Key`, `X-Tenant-Auth` and every custom credential header. An
-# allowlist fails closed (EVO-2250, review finding 13).
+# Header names whose VALUE is safe to log, mirroring `safeHeaderNames` in the Go
+# secretmerge package. The map is free-form, so a denylist misses `X-API-Key`,
+# `X-Tenant-Auth` and every custom credential header; an allowlist fails closed.
 _SAFE_HEADER_NAMES = frozenset(
     {
         "accept",
@@ -153,13 +152,9 @@ async def mcp_context(
         env = server_cfg.get("env", {})
 
         # The env vars go to the CHILD process only, through StdioServerParameters.
-        #
-        # They used to also be written into the processor's own os.environ, which
-        # was redundant (the env= below already reaches the subprocess) and never
-        # undone: one agent's token leaked into every MCP subprocess spawned
-        # afterwards, and across tenants in the enterprise build. Removed in
-        # EVO-2250 story 2.4, since this is the very point where vault-resolved
-        # secrets now pass through.
+        # Writing them into the processor's own os.environ was redundant and
+        # never undone, so one agent's token leaked into every MCP subprocess
+        # spawned afterwards — across tenants in the enterprise build.
         params = StdioServerParameters(command=command, args=args, env=env)
 
     try:

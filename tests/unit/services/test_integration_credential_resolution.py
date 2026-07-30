@@ -1,4 +1,4 @@
-"""Vault resolution for external agent integrations (EVO-2250, story 2.3).
+"""Vault resolution for external agent integrations.
 
 The runtime resolves a credential BY ID only. Precedence between scopes has a
 single owner in the CRM (Ai::IntegrationCredentialResolver, story 2.2), and

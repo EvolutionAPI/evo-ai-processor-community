@@ -43,18 +43,17 @@ logger = setup_logger(__name__)
 
 
 def _nexus_credential_ref(config):
-    """The Nexus dialog stores a scalar credential_id (one secret), so it is
-    adapted to the same map shape the tool and MCP paths use."""
+    """Adapts the Nexus dialog's scalar credential_id to the map shape the tool
+    and MCP paths use."""
     credential_id = config.get("credential_id")
     return {"nexus_api_key": credential_id} if credential_id else {}
 
 def _apply_vault_refs(tool_config, headers, _db=None):
     """Resolves headers that point at the credential vault.
 
-    Opens its own short-lived session: neither tool builder carries one, and
-    threading a session through every call site would be a wider change than
-    this story needs. Any failure falls back to the inline headers, so a vault
-    outage degrades to today's behaviour instead of breaking the tool.
+    Opens its own short-lived session because neither tool builder carries one.
+    Any failure falls back to the inline headers, so a vault outage degrades to
+    today's behaviour instead of breaking the tool.
     """
     credential_refs = tool_config.get("credential_refs") or {}
     if not credential_refs:
@@ -90,7 +89,7 @@ class ToolBuilder:
         method = tool_config["method"]
         headers = tool_config.get("headers", {})
         # Second header-injection path: hardening only one of the two would
-        # leave the other echoing inline secrets (EVO-2250 story 2.4).
+        # leave the other echoing inline secrets.
         headers = _apply_vault_refs(tool_config, headers)
         parameters = tool_config.get("parameters", {}) or {}
         values = strip_modes_meta(tool_config.get("values"))
@@ -464,10 +463,9 @@ class ToolBuilder:
                     knowledge_nexus_config.get("nexus_api_key")
                     or knowledge_nexus_config.get("apiKey")
                 )
-                # EVO-2250 story 2.4: the Nexus key may live in the vault. Only
-                # the key does: nexus_base_url and space_id are the address, not
-                # a secret, and keeping them out is what lets one credential
-                # serve agents pointing at different spaces.
+                # Only the key goes to the vault: nexus_base_url and space_id
+                # are the address, and keeping them out is what lets one
+                # credential serve agents pointing at different spaces.
                 api_key = _apply_vault_refs(
                     {"credential_refs": _nexus_credential_ref(knowledge_nexus_config)},
                     {"nexus_api_key": api_key},

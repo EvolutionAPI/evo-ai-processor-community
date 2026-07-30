@@ -59,7 +59,7 @@ class ExternalAgentBuilder:
                     "Please configure the integration first."
                 )
 
-            # EVO-2250 story 2.3: when the integration points at the credential
+            # when the integration points at the credential
             # vault, the secret comes from there; otherwise the inline value is
             # used exactly as before, so nothing breaks before the migration.
             integration_config = apply_vault_credential(
