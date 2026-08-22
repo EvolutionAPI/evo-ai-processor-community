@@ -169,18 +169,9 @@ def create_pipeline_manipulation_tool(
             }
         """
         try:
-            # CRM-237: the conversation and contact this turn belongs to are FACTS
-            # OF THE CONTEXT, not choices for the model — which is exactly what the
-            # prompt promises ("The conversation_id will be automatically extracted
-            # from the context", llm_agent_builder). Both ids are still declared as
-            # tool parameters, so the model fills them in, and the contact UUID is
-            # right there in the ContactInfo block injected into the prompt: it sent
-            # the CONTACT id as conversation_id and the CRM answered
-            # 400 CONVERSATION_NOT_FOUND, leaving the card where it was.
-            #
-            # So the metadata wins whenever it carries the id. The model's argument
-            # is only honoured when the context has nothing to say — e.g. a tool call
-            # made outside a conversation.
+            # CRM-237: the conversation/contact of a turn is a fact of the context, not a
+            # model choice — the prompt already promises the id is auto-extracted. Metadata
+            # wins; the model's argument only stands when the context is silent.
             context_contact_id = _extract_contact_id_from_metadata(tool_context) if tool_context else None
             context_conversation_id = _extract_conversation_id_from_metadata(tool_context) if tool_context else None
 
