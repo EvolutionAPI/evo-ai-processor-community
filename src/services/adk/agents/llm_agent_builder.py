@@ -162,6 +162,30 @@ def _format_pipeline_rules_for_prompt(pipeline_rules: List[Dict[str, Any]]) -> L
     return lines
 
 
+def _pipeline_tool_instruction(rules_text: List[str]) -> str:
+    """Instruction block for the pipeline tool when the agent has rules configured.
+
+    CRM-238: says when to ACT, which action to pick and that the ids belong to
+    the conversation context — prohibitions alone left the model idle, and an
+    unstated card state made it add a conversation that already had one.
+    """
+    return (
+        "Pipeline Manipulation Tool: Available. It acts on the CURRENT conversation.\n"
+        "WHEN TO ACT: when the customer's message matches a stage's \"move here when\" "
+        "description below, call the tool with that stage's stage_id. Acting is expected "
+        "in that case — do not wait for the customer to ask to be moved.\n"
+        "WHICH ACTION: use action=\"move_to_stage\" for a conversation that already has a card "
+        "in the pipeline — the normal case for an ongoing conversation. Use "
+        "action=\"add_to_pipeline\" only for a conversation that is not in any pipeline yet; "
+        "if a move fails because the card does not exist, then add it.\n"
+        "IDS: do NOT set conversation_id or contact_id — the conversation context "
+        "supplies them and overrides anything you pass. Provide pipeline_id and stage_id.\n"
+        f"Configured pipeline rules:\n{chr(10).join(rules_text)}\n"
+        "Only use a stage listed above: never invent a stage name or id. If no stage's "
+        "description matches the situation, leave the card where it is."
+    )
+
+
 def create_update_current_time_callback(timezone_str: Optional[str] = None):
     """Create a callback function that updates current time with the specified timezone."""
     async def update_current_time(callback_context: CallbackContext):
@@ -832,16 +856,12 @@ class LlmAgentBuilder:
             # Rules that render to nothing take the generic text: telling the
             # model "no rule matches" under an empty list disables the tool.
             if rules_text:
-                crm_tools_instructions.append(
-                    "Pipeline Manipulation Tool: Available. Use this tool to assign the current conversation to a pipeline or move it between stages. "
-                    "The conversation_id will be automatically extracted from the context. "
-                    f"Configured pipeline rules:\n{chr(10).join(rules_text)}\n"
-                    "Apply a rule only when its instructions clearly match the current situation. Do not move conversations between stages without a matching rule."
-                )
+                crm_tools_instructions.append(_pipeline_tool_instruction(rules_text))
             else:
                 crm_tools_instructions.append(
                     "Pipeline Manipulation Tool: Available. Use this tool to assign the current conversation to a pipeline or move it between stages when the conversation reaches a state that warrants it (e.g., qualified lead, sale closed, follow-up needed). "
-                    "The conversation_id is auto-extracted from the context; you must provide the target pipeline_id and stage_id (or the stage you want to move to)."
+                    "Use action=\"move_to_stage\" for a conversation that already has a card in the pipeline; use action=\"add_to_pipeline\" only for one that is not in any pipeline yet. "
+                    "Do NOT set conversation_id or contact_id — the conversation context supplies them and overrides anything you pass. Provide the target pipeline_id and stage_id (or stage_name)."
                 )
 
         if allow_manage_labels:
