@@ -169,18 +169,38 @@ def create_pipeline_manipulation_tool(
             }
         """
         try:
-            # Extract IDs from metadata if not provided
-            effective_contact_id = contact_id
-            if not effective_contact_id and tool_context:
-                effective_contact_id = _extract_contact_id_from_metadata(tool_context)
-                if effective_contact_id:
-                    logger.info(f"Extracted contact_id from metadata: {effective_contact_id}")
+            # CRM-237: the conversation and contact this turn belongs to are FACTS
+            # OF THE CONTEXT, not choices for the model — which is exactly what the
+            # prompt promises ("The conversation_id will be automatically extracted
+            # from the context", llm_agent_builder). Both ids are still declared as
+            # tool parameters, so the model fills them in, and the contact UUID is
+            # right there in the ContactInfo block injected into the prompt: it sent
+            # the CONTACT id as conversation_id and the CRM answered
+            # 400 CONVERSATION_NOT_FOUND, leaving the card where it was.
+            #
+            # So the metadata wins whenever it carries the id. The model's argument
+            # is only honoured when the context has nothing to say — e.g. a tool call
+            # made outside a conversation.
+            context_contact_id = _extract_contact_id_from_metadata(tool_context) if tool_context else None
+            context_conversation_id = _extract_conversation_id_from_metadata(tool_context) if tool_context else None
 
-            effective_conversation_id = conversation_id
-            if not effective_conversation_id and tool_context:
-                effective_conversation_id = _extract_conversation_id_from_metadata(tool_context)
-                if effective_conversation_id:
-                    logger.info(f"Extracted conversation_id from metadata: {effective_conversation_id}")
+            effective_contact_id = context_contact_id or contact_id
+            if context_contact_id:
+                if contact_id and contact_id != context_contact_id:
+                    logger.warning(
+                        f"[CRM-237] ignoring contact_id={contact_id!r} from the model; "
+                        f"the conversation's contact is {context_contact_id}"
+                    )
+                logger.info(f"Extracted contact_id from metadata: {effective_contact_id}")
+
+            effective_conversation_id = context_conversation_id or conversation_id
+            if context_conversation_id:
+                if conversation_id and conversation_id != context_conversation_id:
+                    logger.warning(
+                        f"[CRM-237] ignoring conversation_id={conversation_id!r} from the model; "
+                        f"the current conversation is {context_conversation_id}"
+                    )
+                logger.info(f"Extracted conversation_id from metadata: {effective_conversation_id}")
 
             # Get pipeline_rules from tool context if not provided during tool creation
             available_pipeline_rules = default_pipeline_rules
