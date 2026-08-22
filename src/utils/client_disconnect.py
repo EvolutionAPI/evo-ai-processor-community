@@ -1,21 +1,10 @@
 """
 Stop running an agent once nobody is waiting for the answer.
 
-CRM-236: bot-runtime gives up on the A2A call when its own ceiling is reached
-and closes the connection, but the processor never noticed. A real timeline
-from the incident:
-
-    04:12:47  bot-runtime -> processor
-    04:13:17  bot-runtime gives up (timeout) and closes the socket
-    04:18:26  processor: "Agent execution completed successfully"
-
-Five extra minutes of model calls whose result had nowhere to go. That is not
-merely wasted compute: the turn keeps consuming the very quota whose exhaustion
-caused the timeout in the first place, so a degraded provider makes the
-processor pile on more load precisely when it can least afford it.
-
-`run_unless_client_disconnects` races the work against the ASGI disconnect
-signal and cancels the work when the client is gone.
+CRM-236: bot-runtime closes the A2A connection at its own ceiling and the
+processor kept working for another five minutes, burning the same quota whose
+exhaustion caused the timeout. `run_unless_client_disconnects` races the work
+against the ASGI disconnect signal and cancels it when the client is gone.
 """
 
 import asyncio
@@ -66,24 +55,11 @@ def disconnect_poll_seconds() -> float:
 async def _watch_via_receive(receive: Any) -> bool:
     """Await the ASGI `http.disconnect` message. Preferred detection path.
 
-    Polling `request.is_disconnected()` DOES NOT WORK here, and the first
-    version of this module shipped with that bug — proven against the running
-    stack, where the client aborted at 12:35:53 and the agent still finished at
-    12:36:20, 27s later, exactly as in the original incident.
-
-    The reason is uvicorn's flow control: once the request body has been read it
-    calls `transport.pause_reading()`, which removes the socket from the event
-    loop's selector. Nothing is watching the socket any more, so the peer's
-    FIN/RST is never noticed, `connection_lost()` is never called, and
-    `is_disconnected()` keeps answering False right up to the point where the
-    response is written.
-
-    Awaiting `receive()` fixes it because uvicorn calls `flow.resume_reading()`
-    on the way in, putting the socket back under the selector — so the
-    disconnect is delivered as an event, with no polling interval to lose.
-
-    Safe with respect to the body: the handler has already consumed it via
-    `await request.json()`, so no `http.request` message can be stolen here.
+    Polling `is_disconnected()` does not work: once the body is read uvicorn
+    calls `transport.pause_reading()`, the socket leaves the selector, the peer's
+    FIN is never noticed and it answers False forever. Awaiting `receive()`
+    triggers `resume_reading()` and the disconnect arrives as an event. Safe with
+    respect to the body — the handler has already consumed it.
     """
     while True:
         message = await receive()

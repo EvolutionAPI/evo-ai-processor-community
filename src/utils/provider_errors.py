@@ -1,22 +1,11 @@
 """
 Classify LLM-provider failures so the operator sees WHY a turn failed.
 
-CRM-236: every exception raised while running an agent was funnelled into
-`InternalServerError(str(e))` (standard_runner.py) and answered as a generic
-`500 / -32603 Agent execution failed`. A quota exhaustion (429) and a genuine
-bug in our code produced byte-identical responses, so the only way to find out
-that the account had simply run out of free-tier requests was to open the
-container logs.
-
-This module reads the *cause chain* of an exception and, when it recognises a
-provider-side condition, returns the status/code/message that should be sent
-instead. Recognition is deliberately conservative: when nothing matches we
-return None and the caller keeps the existing 500 behaviour.
-
-Nothing here talks to a provider SDK — matching is done on the exception's
-class name, its `status_code`/`code` attribute and its text, so it works for
-litellm, google-genai, openai and anything else that follows the same
-conventions, without importing any of them.
+The runner funnels every exception into `InternalServerError(str(e))`, so a
+quota exhaustion and a bug of ours answered identically. This reads the cause
+chain and returns what to send instead. Conservative on purpose: no match means
+None and the caller keeps its 500. No provider SDK is imported — matching is on
+class name, status attribute and text.
 """
 
 import re
@@ -39,18 +28,9 @@ class ProviderFailure:
 
     kind: str  # rate_limit | unavailable | auth | context_length
     http_status: int
-    # JSON-RPC reserves -32000..-32099 for implementation-defined server errors,
-    # which is exactly what these are. -32603 (internal error) stays reserved for
-    # failures that really are ours.
-    #
-    # The codes live at -3201x, NOT at the bottom of the range: src/schemas/
-    # a2a_types.py already owns -32001 TaskNotFound, -32002 TaskNotCancelable,
-    # -32003 PushNotificationNotSupported, -32004 UnsupportedOperation and
-    # -32005 ContentTypeNotSupported, and a2a_routes.py emits them. Reasoning
-    # about the reserved RANGE was not enough — an exhausted quota went on the
-    # wire as "Task not found" to any conforming A2A client, which is the
-    # opposite of this module's purpose. -32006..-32009 are left free so that
-    # catalogue can grow without colliding again.
+    # -3201x, not the bottom of the reserved -32000..-32099 range: a2a_types.py
+    # already owns -32001..-32005 and a2a_routes.py emits them, so a quota error
+    # went out as "Task not found". -32006..-32009 left free for that catalogue.
     jsonrpc_code: int
     message: str
     detail: str
@@ -175,25 +155,11 @@ def _matches(haystack: str, markers) -> bool:
     return any(marker in haystack for marker in markers)
 
 
-# Evidence that an exception came from an LLM provider at all.
-#
-# CRM-236 review: the first version trusted `status_code` on ANY link of the
-# cause chain, with no provider anchor and with status taking precedence over
-# text. The runner calls `raise_for_status()` against internal services
-# (standard_runner.py:222 memory, :311 evo-kb-service), so their httpx errors
-# entered the chain and were classified — a knowledge-base outage was reported
-# as "The model provider is unavailable", and a wrong internal API token as
-# "The model provider rejected our credentials".
-#
-# That is the exact inversion of the bug this module exists to fix: the care
-# went into the text markers, none into the status match.
-#
-# The design choice here is to require an anchor rather than to blacklist
-# internal hosts. A blacklist rots — every new internal service has to be
-# remembered, and forgetting one silently reintroduces the inversion. Requiring
-# positive evidence fails in the safe direction that this module already
-# committed to: no anchor means no classification, and the response stays the
-# honest 500.
+# Evidence that an exception came from an LLM provider at all. Without it the
+# runner's raise_for_status() against our own services (evo-kb-service, the
+# memory service) carried their 5xx/401 into the chain and was reported as a
+# provider outage. An anchor is required rather than internal hosts blacklisted:
+# a blacklist rots, and forgetting one entry restores the inversion in silence.
 _PROVIDER_MODULES = (
     "litellm",
     "openai",
@@ -239,14 +205,9 @@ _PROVIDER_TEXT_MARKERS = (
 )
 
 
-# Wording that ONLY an LLM provider produces, so it anchors on its own.
-#
-# The distinction that matters is between markers that are unambiguous and
-# markers that are not. "resource_exhausted" or "maximum context length" cannot
-# come from evo-kb-service; "rate limit", "too many requests", "service
-# unavailable" and a bare 429/503 absolutely can. The first group anchors by
-# itself, the second needs separate evidence — which is what kept a
-# knowledge-base outage from being reported as a provider outage.
+# Wording only an LLM provider produces, so it anchors on its own. The ambiguous
+# markers ("rate limit", "too many requests", a bare 429/503) stay out: an
+# internal service produces those too, and they need separate evidence.
 _SELF_ANCHORING_MARKERS = (
     "resource_exhausted",
     "resource exhausted",

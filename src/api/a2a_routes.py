@@ -1047,10 +1047,8 @@ async def handle_message_send(
         session_id = f"{context_id}_{agent_id}"
         logger.info(f"📋 Using session_id: {session_id}")
 
-        # CRM-236: bounded by whoever is waiting. If the caller (bot-runtime)
-        # hits its own ceiling and hangs up, the run is cancelled instead of
-        # spending another five minutes — and more of the scarce provider
-        # quota — on an answer with nowhere to go.
+        # CRM-236: bounded by whoever is waiting. When the caller hangs up the
+        # run is cancelled instead of burning more of the provider's quota.
         result = await run_unless_client_disconnects(
             request,
             run_agent(
@@ -1120,9 +1118,8 @@ async def handle_message_send(
         logger.warning(f"⛔ {e}")
         return error_response(
             request=request,
-            # 499 is nginx's convention for "caller hung up"; there is no RFC
-            # status for it, so it is spelled literally rather than via
-            # fastapi.status (which has no constant for it).
+            # 499 is nginx's convention for "caller hung up"; no RFC status
+            # exists, so fastapi.status has no constant to use here.
             code=map_status_to_error_code(499),
             message="Client closed the request before the agent finished",
             status_code=499,
@@ -1138,9 +1135,8 @@ async def handle_message_send(
         )
 
     except Exception as e:
-        # CRM-236: a quota exhaustion (429) and a bug in our code used to be
-        # indistinguishable from outside — both were "500 Agent execution
-        # failed". Report the provider's condition when we can recognise it.
+        # CRM-236: a quota exhaustion and a bug of ours both answered "500 Agent
+        # execution failed". Report the provider's condition when we recognise it.
         provider_failure = classify_provider_error(e)
         if provider_failure is not None:
             log_provider_failure(provider_failure, agent_id)
@@ -1163,12 +1159,8 @@ async def handle_message_send(
                 },
             )
 
-        # CRM-236 review (5): the fallback is the COMMON path, because
-        # classification is conservative on purpose — so it is the path most
-        # likely to carry a credential. Provider errors echo the request URL
-        # (`?key=AIza…`), and this used to emit str(e) raw into both the log and
-        # `data.error`. redact_secrets already existed in this PR; it just was
-        # not applied where it mattered most.
+        # Classification is conservative, so this fallback is the common path —
+        # and the one most likely to carry a credential (`?key=AIza…`).
         safe = redact_secrets(str(e))
         logger.error(f"❌ Agent execution error: {safe}")
         return error_response(
@@ -1305,18 +1297,10 @@ async def handle_message_stream(
             yield {"data": json.dumps(final_event)}
 
         except Exception as e:
-            # CRM-236 review (7): the stream reported every failure as a generic
-            # -32603 and echoed str(e) raw, so a quota exhaustion was as opaque
-            # here as it used to be on message/send — and the raw text carries
-            # `?key=AIza…`.
-            #
-            # NOTE on the other half of that finding: this route needs NO
-            # disconnect guard. sse-starlette runs _listen_for_disconnect inside
-            # cancel_on_finish, which cancels the whole task group — including
-            # _stream_response, the consumer of this generator — the moment
-            # http.disconnect arrives. Adding run_unless_client_disconnects here
-            # would put a SECOND consumer on the same receive channel, and the
-            # two would steal each other's message.
+            # No disconnect guard here on purpose: sse-starlette already runs
+            # _listen_for_disconnect inside cancel_on_finish, which cancels the
+            # task group consuming this generator. A second consumer on the same
+            # receive channel would steal the message the first waits for.
             provider_failure = classify_provider_error(e)
             if provider_failure is not None:
                 log_provider_failure(provider_failure, agent_id)
