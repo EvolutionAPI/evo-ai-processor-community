@@ -159,10 +159,13 @@ def _format_pipeline_rules_for_prompt(pipeline_rules: List[Dict[str, Any]]) -> L
             continue
 
         # Legacy flat rule: the stage sat on the rule itself.
-        legacy_stage = rule.get("stageName") or rule.get("stage_name") or rule.get("stageId") or rule.get("stage_id")
+        legacy_stage_id = rule.get("stageId") or rule.get("stage_id")
+        legacy_stage = rule.get("stageName") or rule.get("stage_name") or legacy_stage_id
         legacy_instructions = rule.get("instructions") or rule.get("description") or ""
         if legacy_stage:
             descriptor = f"    - Stage: {legacy_stage}"
+            if legacy_stage_id and legacy_stage_id != legacy_stage:
+                descriptor += f" (stage_id: {legacy_stage_id})"
             if legacy_instructions:
                 descriptor += f" — move here when: {legacy_instructions}"
             lines.append(descriptor)
@@ -171,20 +174,11 @@ def _format_pipeline_rules_for_prompt(pipeline_rules: List[Dict[str, Any]]) -> L
 
 
 def _pipeline_tool_instruction(rules_text: List[str]) -> str:
-    """Instruction for the pipeline tool when the agent has rules configured.
+    """Instruction block for the pipeline tool when the agent has rules configured.
 
-    CRM-238: the previous wording was two prohibitions in a row ("apply a rule
-    only when…", "do not move conversations between stages without…") with no
-    positive criterion, and it never said whether the conversation ALREADY has a
-    card. In live runs the model either did nothing at all, or chose
-    ``add_to_pipeline`` for a conversation that was already in the funnel (the
-    CRM answered 400 CONVERSATION_NOT_FOUND). It also called the ids automatic
-    while the tool schema offered them as parameters, so the model filled
-    ``conversation_id`` with the CONTACT id.
-
-    So this states when to ACT, which action to pick, and that the ids are not
-    the model's to fill — while keeping the guardrail that no stage may be
-    invented.
+    CRM-238: says when to ACT, which action to pick and that the ids belong to
+    the conversation context — prohibitions alone left the model idle, and an
+    unstated card state made it add a conversation that already had one.
     """
     return (
         "Pipeline Manipulation Tool: Available. It acts on the CURRENT conversation.\n"
@@ -195,8 +189,8 @@ def _pipeline_tool_instruction(rules_text: List[str]) -> str:
         "in the pipeline — the normal case for an ongoing conversation. Use "
         "action=\"add_to_pipeline\" only for a conversation that is not in any pipeline yet; "
         "if a move fails because the card does not exist, then add it.\n"
-        "IDS: do NOT set conversation_id or contact_id — they come from the conversation "
-        "context and anything you pass is ignored. Provide pipeline_id and stage_id.\n"
+        "IDS: do NOT set conversation_id or contact_id — the conversation context "
+        "supplies them and overrides anything you pass. Provide pipeline_id and stage_id.\n"
         f"Configured pipeline rules:\n{chr(10).join(rules_text)}\n"
         "Only use a stage listed above: never invent a stage name or id. If no stage's "
         "description matches the situation, leave the card where it is."
@@ -872,7 +866,8 @@ class LlmAgentBuilder:
             else:
                 crm_tools_instructions.append(
                     "Pipeline Manipulation Tool: Available. Use this tool to assign the current conversation to a pipeline or move it between stages when the conversation reaches a state that warrants it (e.g., qualified lead, sale closed, follow-up needed). "
-                    "The conversation_id is auto-extracted from the context; you must provide the target pipeline_id and stage_id (or the stage you want to move to)."
+                    "Use action=\"move_to_stage\" for a conversation that already has a card in the pipeline; use action=\"add_to_pipeline\" only for one that is not in any pipeline yet. "
+                    "Do NOT set conversation_id or contact_id — the conversation context supplies them and overrides anything you pass. Provide the target pipeline_id and stage_id (or stage_name)."
                 )
 
         if allow_manage_labels:

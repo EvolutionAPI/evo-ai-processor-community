@@ -1,13 +1,8 @@
-"""The pipeline instruction must tell the model WHEN to act and WHICH action.
+"""The pipeline instruction must say WHEN to act, WHICH action, and whose the ids are.
 
-CRM-238: the previous wording was two prohibitions in a row ("apply a rule only
-when…", "do not move conversations between stages without…") with no positive
-criterion, and never said whether the conversation already had a card. In live
-runs the model either did nothing at all, or picked add_to_pipeline for a
-conversation that was already in the funnel (400 CONVERSATION_NOT_FOUND).
-
-It also told the model the ids were automatic while the tool schema offered
-them as parameters — so the model filled conversation_id with the CONTACT id.
+CRM-238: prohibitions with no positive criterion left the model idle, an unstated
+card state made it add a conversation that already had one, and a schema offering
+the ids made it send the contact id as conversation_id.
 """
 
 from src.services.adk.tools.evo_crm.pipeline_manipulation import create_pipeline_manipulation_tool
@@ -46,6 +41,14 @@ class TestActionChoice:
     def test_move_is_the_normal_case_for_an_ongoing_conversation(self):
         assert "already has a card" in PROMPT_BLOCK
         assert "not in any pipeline yet" in PROMPT_BLOCK
+
+    def test_the_tool_schema_carries_the_same_rule(self):
+        # The rule is written in two files; editing one and not the other puts
+        # the prompt and the schema back in disagreement.
+        doc = create_pipeline_manipulation_tool().func.__doc__
+
+        assert "already has a card" in doc
+        assert "not in any pipeline yet" in doc
 
 
 class TestIdsAreNotTheModelsToFill:

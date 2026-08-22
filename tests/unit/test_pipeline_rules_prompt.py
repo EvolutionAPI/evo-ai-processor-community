@@ -99,6 +99,23 @@ class TestEdgeShapes:
         assert "Ganho" in text
         assert "quando fechar" in text
 
+    def test_legacy_flat_rule_exposes_its_stage_id(self):
+        # Without the id the model has nothing legal to pass: the instruction
+        # demands a stage_id and forbids inventing one.
+        legacy = [
+            {
+                "pipelineId": "pipe-9",
+                "pipelineName": "Antigo",
+                "stageName": "Ganho",
+                "stageId": "stg-ganho",
+                "instructions": "quando fechar",
+            }
+        ]
+
+        text = "\n".join(_format_pipeline_rules_for_prompt(legacy))
+
+        assert "stg-ganho" in text
+
     def test_rule_without_stages_still_names_the_pipeline(self):
         text = "\n".join(_format_pipeline_rules_for_prompt([{"pipelineId": "p", "pipelineName": "Só o funil"}]))
 

@@ -99,6 +99,8 @@ def create_pipeline_manipulation_tool(
     client = EvoCrmClient()
     default_pipeline_rules = pipeline_rules or []
 
+    # The docstring below is REPLACED at the end of this factory; the rewritten
+    # one is what becomes the schema the model reads.
     async def pipeline_manipulation(
         action: str,
         contact_id: Optional[str] = None,
@@ -144,13 +146,10 @@ def create_pipeline_manipulation_tool(
                    - 'create_task': Create a new task
                    - 'update_task': Update an existing task
                    - 'complete_task': Mark a task as completed
-            contact_id: DO NOT SET. The contact of the current conversation is
-                   taken from the context; any value passed here is ignored.
-            conversation_id: DO NOT SET. The current conversation is taken from
-                   the context; any value passed here is ignored. (CRM-238: this
-                   field used to read as "auto-extracted from context" while still
-                   being offered as a parameter — the model filled it with the
-                   CONTACT id and the CRM answered 404/400.)
+            contact_id: DO NOT SET. The conversation context supplies it and
+                   overrides anything passed here.
+            conversation_id: DO NOT SET. The conversation context supplies it and
+                   overrides anything passed here.
             pipeline_id: ID of the pipeline (optional if only one pipeline is configured)
             stage_id: ID of the stage to move to (for move_to_stage, use stage_id OR stage_name)
             stage_name: Name of the stage to move to (alternative to stage_id, e.g. "Em Progresso")
@@ -355,8 +354,10 @@ def create_pipeline_manipulation_tool(
 
     Args:
         action: The action to perform
-        contact_id: DO NOT SET. Taken from the conversation context; ignored.
-        conversation_id: DO NOT SET. Taken from the conversation context; ignored.
+        contact_id: DO NOT SET. Supplied by the conversation context, which
+            overrides anything passed here.
+        conversation_id: DO NOT SET. Supplied by the conversation context, which
+            overrides anything passed here.
         pipeline_id: ID of the pipeline (optional if only one configured)
         stage_id: ID of the stage (required for move_to_stage)
         notes: Optional notes
@@ -393,7 +394,7 @@ async def _add_to_pipeline(
     if not contact_id and not conversation_id:
         return {
             "status": "error",
-            "message": "Either contact_id or conversation_id is required to add to pipeline.",
+            "message": "No contact or conversation in context: this tool only runs inside a conversation.",
             "action": "add_to_pipeline",
         }
 
@@ -473,7 +474,7 @@ async def _move_to_stage(
     if not conversation_id:
         return {
             "status": "error",
-            "message": "conversation_id is required to move to a different stage.",
+            "message": "No conversation in context: this tool only runs inside a conversation.",
             "action": "move_to_stage",
         }
 
@@ -567,7 +568,7 @@ async def _create_task(
     if not conversation_id:
         return {
             "status": "error",
-            "message": "conversation_id is required to create a task.",
+            "message": "No conversation in context: this tool only runs inside a conversation.",
             "action": "create_task",
         }
 
