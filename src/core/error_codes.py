@@ -35,9 +35,21 @@ RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
 RESOURCE_ALREADY_EXISTS = "RESOURCE_ALREADY_EXISTS"
 CONFLICT = "CONFLICT"
 
+# 413 Payload Too Large
+PAYLOAD_TOO_LARGE = "PAYLOAD_TOO_LARGE"
+
 # 422 Unprocessable Entity
 BUSINESS_RULE_VIOLATION = "BUSINESS_RULE_VIOLATION"
 INVALID_STATE_TRANSITION = "INVALID_STATE_TRANSITION"
+
+# 429 Too Many Requests
+# CRM-236: an upstream model provider refusing us for quota/rate reasons is not
+# an internal error, and reporting it as one sent operators bug-hunting through
+# our code when the account had simply run out of free-tier requests.
+RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
+
+# 499 Client Closed Request (nginx convention; no RFC status exists)
+CLIENT_CLOSED_REQUEST = "CLIENT_CLOSED_REQUEST"
 
 # 500 Internal Server Error
 INTERNAL_ERROR = "INTERNAL_ERROR"

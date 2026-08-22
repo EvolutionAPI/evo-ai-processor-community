@@ -76,6 +76,8 @@ from src.schemas.chat import FileData
 from src.schemas.responses import ErrorResponse
 from src.utils.logger import setup_logger
 from src.utils.response import error_response, map_status_to_error_code, success_response
+from src.utils.client_disconnect import ClientGoneAway, run_unless_client_disconnects
+from src.utils.provider_errors import classify_provider_error, log_provider_failure
 from src.services.tools_service import tools_service
 from src.services.mcp_server_service import get_mcp_server
 from src.middleware.permissions import RequirePermission
@@ -1045,18 +1047,26 @@ async def handle_message_send(
         session_id = f"{context_id}_{agent_id}"
         logger.info(f"📋 Using session_id: {session_id}")
 
-        result = await run_agent(
-            agent_id=str(agent_id),
-            external_id=context_id,  # contextId is the conversation UUID
-            message=text,  # Send only the original message - ADK handles context
-            session_service=session_service,
-            artifacts_service=artifacts_service,
-            memory_service=memory_service,
-            db=db,
-            session_id=session_id,  # Use explicit session_id with agent_id from URL
-            files=files if files else None,
-            metadata=metadata,
-            user_id=user_id,  # Pass contact_id as user_id
+        # CRM-236: bounded by whoever is waiting. If the caller (bot-runtime)
+        # hits its own ceiling and hangs up, the run is cancelled instead of
+        # spending another five minutes — and more of the scarce provider
+        # quota — on an answer with nowhere to go.
+        result = await run_unless_client_disconnects(
+            request,
+            run_agent(
+                agent_id=str(agent_id),
+                external_id=context_id,  # contextId is the conversation UUID
+                message=text,  # Send only the original message - ADK handles context
+                session_service=session_service,
+                artifacts_service=artifacts_service,
+                memory_service=memory_service,
+                db=db,
+                session_id=session_id,  # Use explicit session_id with agent_id from URL
+                files=files if files else None,
+                metadata=metadata,
+                user_id=user_id,  # Pass contact_id as user_id
+            ),
+            label=f"agent {agent_id} execution",
         )
 
         final_response = result.get("final_response", "No response")
@@ -1104,7 +1114,55 @@ async def handle_message_send(
             content={"jsonrpc": "2.0", "id": request_id, "result": task_response}
         )
 
+    except ClientGoneAway as e:
+        # Nobody is waiting for this response — it is logged for the operator
+        # and returned only because the handler must return something.
+        logger.warning(f"⛔ {e}")
+        return error_response(
+            request=request,
+            # 499 is nginx's convention for "caller hung up"; there is no RFC
+            # status for it, so it is spelled literally rather than via
+            # fastapi.status (which has no constant for it).
+            code=map_status_to_error_code(499),
+            message="Client closed the request before the agent finished",
+            status_code=499,
+            details={
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {
+                    "code": -32000,
+                    "message": "Client closed the request before the agent finished",
+                    "data": {"error": str(e)},
+                },
+            },
+        )
+
     except Exception as e:
+        # CRM-236: a quota exhaustion (429) and a bug in our code used to be
+        # indistinguishable from outside — both were "500 Agent execution
+        # failed". Report the provider's condition when we can recognise it.
+        provider_failure = classify_provider_error(e)
+        if provider_failure is not None:
+            log_provider_failure(provider_failure, agent_id)
+            return error_response(
+                request=request,
+                code=map_status_to_error_code(provider_failure.http_status),
+                message=provider_failure.message,
+                status_code=provider_failure.http_status,
+                details={
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": provider_failure.jsonrpc_code,
+                        "message": provider_failure.message,
+                        "data": {
+                            "kind": provider_failure.kind,
+                            "error": provider_failure.detail,
+                        },
+                    },
+                },
+            )
+
         logger.error(f"❌ Agent execution error: {e}")
         return error_response(
             request=request,
