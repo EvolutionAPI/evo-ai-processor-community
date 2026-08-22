@@ -144,8 +144,13 @@ def create_pipeline_manipulation_tool(
                    - 'create_task': Create a new task
                    - 'update_task': Update an existing task
                    - 'complete_task': Mark a task as completed
-            contact_id: ID of the contact (optional, auto-extracted from context)
-            conversation_id: ID of the conversation (optional, auto-extracted from context)
+            contact_id: DO NOT SET. The contact of the current conversation is
+                   taken from the context; any value passed here is ignored.
+            conversation_id: DO NOT SET. The current conversation is taken from
+                   the context; any value passed here is ignored. (CRM-238: this
+                   field used to read as "auto-extracted from context" while still
+                   being offered as a parameter — the model filled it with the
+                   CONTACT id and the CRM answered 404/400.)
             pipeline_id: ID of the pipeline (optional if only one pipeline is configured)
             stage_id: ID of the stage to move to (for move_to_stage, use stage_id OR stage_name)
             stage_name: Name of the stage to move to (alternative to stage_id, e.g. "Em Progresso")
@@ -344,10 +349,14 @@ def create_pipeline_manipulation_tool(
     - update_task: Update an existing task
     - complete_task: Mark a task as completed{pipeline_rules_doc}
 
+    Use move_to_stage for a conversation that already has a card in the pipeline
+    (the normal case for an ongoing conversation); use add_to_pipeline only for a
+    conversation that is not in any pipeline yet.
+
     Args:
         action: The action to perform
-        contact_id: ID of the contact (optional, auto-extracted)
-        conversation_id: ID of the conversation (optional, auto-extracted)
+        contact_id: DO NOT SET. Taken from the conversation context; ignored.
+        conversation_id: DO NOT SET. Taken from the conversation context; ignored.
         pipeline_id: ID of the pipeline (optional if only one configured)
         stage_id: ID of the stage (required for move_to_stage)
         notes: Optional notes
