@@ -169,18 +169,29 @@ def create_pipeline_manipulation_tool(
             }
         """
         try:
-            # Extract IDs from metadata if not provided
-            effective_contact_id = contact_id
-            if not effective_contact_id and tool_context:
-                effective_contact_id = _extract_contact_id_from_metadata(tool_context)
-                if effective_contact_id:
-                    logger.info(f"Extracted contact_id from metadata: {effective_contact_id}")
+            # CRM-237: the conversation/contact of a turn is a fact of the context, not a
+            # model choice — the prompt already promises the id is auto-extracted. Metadata
+            # wins; the model's argument only stands when the context is silent.
+            context_contact_id = _extract_contact_id_from_metadata(tool_context) if tool_context else None
+            context_conversation_id = _extract_conversation_id_from_metadata(tool_context) if tool_context else None
 
-            effective_conversation_id = conversation_id
-            if not effective_conversation_id and tool_context:
-                effective_conversation_id = _extract_conversation_id_from_metadata(tool_context)
-                if effective_conversation_id:
-                    logger.info(f"Extracted conversation_id from metadata: {effective_conversation_id}")
+            effective_contact_id = context_contact_id or contact_id
+            if context_contact_id:
+                if contact_id and contact_id != context_contact_id:
+                    logger.warning(
+                        f"[CRM-237] ignoring contact_id={contact_id!r} from the model; "
+                        f"the conversation's contact is {context_contact_id}"
+                    )
+                logger.info(f"Extracted contact_id from metadata: {effective_contact_id}")
+
+            effective_conversation_id = context_conversation_id or conversation_id
+            if context_conversation_id:
+                if conversation_id and conversation_id != context_conversation_id:
+                    logger.warning(
+                        f"[CRM-237] ignoring conversation_id={conversation_id!r} from the model; "
+                        f"the current conversation is {context_conversation_id}"
+                    )
+                logger.info(f"Extracted conversation_id from metadata: {effective_conversation_id}")
 
             # Get pipeline_rules from tool context if not provided during tool creation
             available_pipeline_rules = default_pipeline_rules
