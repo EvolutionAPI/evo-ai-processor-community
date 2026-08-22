@@ -77,7 +77,7 @@ from src.schemas.responses import ErrorResponse
 from src.utils.logger import setup_logger
 from src.utils.response import error_response, map_status_to_error_code, success_response
 from src.utils.client_disconnect import ClientGoneAway, run_unless_client_disconnects
-from src.utils.provider_errors import classify_provider_error, log_provider_failure
+from src.utils.provider_errors import classify_provider_error, log_provider_failure, redact_secrets
 from src.services.tools_service import tools_service
 from src.services.mcp_server_service import get_mcp_server
 from src.middleware.permissions import RequirePermission
@@ -1305,16 +1305,45 @@ async def handle_message_stream(
             yield {"data": json.dumps(final_event)}
 
         except Exception as e:
-            logger.error(f"❌ Streaming error: {e}")
-            error_event = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {
-                    "code": -32603,
-                    "message": "Streaming failed",
-                    "data": {"error": str(e)},
-                },
-            }
+            # CRM-236 review (7): the stream reported every failure as a generic
+            # -32603 and echoed str(e) raw, so a quota exhaustion was as opaque
+            # here as it used to be on message/send — and the raw text carries
+            # `?key=AIza…`.
+            #
+            # NOTE on the other half of that finding: this route needs NO
+            # disconnect guard. sse-starlette runs _listen_for_disconnect inside
+            # cancel_on_finish, which cancels the whole task group — including
+            # _stream_response, the consumer of this generator — the moment
+            # http.disconnect arrives. Adding run_unless_client_disconnects here
+            # would put a SECOND consumer on the same receive channel, and the
+            # two would steal each other's message.
+            provider_failure = classify_provider_error(e)
+            if provider_failure is not None:
+                log_provider_failure(provider_failure, agent_id)
+                error_event = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": provider_failure.jsonrpc_code,
+                        "message": provider_failure.message,
+                        "data": {
+                            "kind": provider_failure.kind,
+                            "error": provider_failure.detail,
+                        },
+                    },
+                }
+            else:
+                safe_stream_error = redact_secrets(str(e))
+                logger.error(f"❌ Streaming error: {safe_stream_error}")
+                error_event = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32603,
+                        "message": "Streaming failed",
+                        "data": {"error": safe_stream_error},
+                    },
+                }
             yield {"data": json.dumps(error_event)}
 
     return EventSourceResponse(stream_generator())
