@@ -28,7 +28,7 @@
 """
 
 
-from typing import List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 from functools import cached_property
 import os
 from google.adk.agents.llm_agent import LlmAgent
@@ -95,6 +95,71 @@ def get_datetime_in_timezone(timezone_str: Optional[str] = None) -> datetime:
             logger.warning(f"Invalid timezone '{timezone_str}': {e}, using UTC")
             return datetime.now(ZoneInfo("UTC"))
     return datetime.now(ZoneInfo("UTC"))
+
+
+def _format_pipeline_rules_for_prompt(pipeline_rules: List[Dict[str, Any]]) -> List[str]:
+    """Render the agent's pipeline rules as prompt lines, one per STAGE.
+
+    The stages live inside each rule (``rule["stages"]``), not on the rule
+    itself, and each line carries the ids the tool needs. A stage with no
+    ``stageId`` is dropped: the model cannot call the tool without one, and
+    listing it only invites an invented stage name.
+    """
+    lines: List[str] = []
+
+    for rule in pipeline_rules or []:
+        if not isinstance(rule, dict):
+            continue
+
+        pipeline_name = (
+            rule.get("pipelineName")
+            or rule.get("pipeline_name")
+            or rule.get("pipelineId")
+            or rule.get("pipeline_id")
+            or "unknown pipeline"
+        )
+        pipeline_id = rule.get("pipelineId") or rule.get("pipeline_id")
+        general = rule.get("generalInstructions") or rule.get("general_instructions") or ""
+
+        header = f"- Pipeline: {pipeline_name}"
+        if pipeline_id:
+            header += f" (pipeline_id: {pipeline_id})"
+        if general:
+            header += f" — {general}"
+        lines.append(header)
+
+        stages = rule.get("stages")
+        if isinstance(stages, list) and stages:
+            for stage in stages:
+                if not isinstance(stage, dict):
+                    continue
+                stage_id = stage.get("stageId") or stage.get("stage_id") or ""
+                if not stage_id:
+                    # Half-configured stage: the operator wrote the criteria and
+                    # never picked the stage in the select.
+                    logger.warning(f"pipeline rule stage without stageId, skipped: {stage}")
+                    continue
+                stage_name = stage.get("stageName") or stage.get("stage_name") or stage_id
+                instructions = stage.get("instructions") or stage.get("description") or ""
+
+                descriptor = f"    - Stage: {stage_name} (stage_id: {stage_id})"
+                if instructions:
+                    descriptor += f" — move here when: {instructions}"
+                lines.append(descriptor)
+            continue
+
+        # Legacy flat rule: the stage sat on the rule itself. Without an id it is
+        # unreachable anyway -- the tool resolves a name through rule["stages"].
+        legacy_id = rule.get("stageId") or rule.get("stage_id") or ""
+        legacy_name = rule.get("stageName") or rule.get("stage_name") or legacy_id
+        legacy_instructions = rule.get("instructions") or rule.get("description") or ""
+        if legacy_id:
+            descriptor = f"    - Stage: {legacy_name} (stage_id: {legacy_id})"
+            if legacy_instructions:
+                descriptor += f" — move here when: {legacy_instructions}"
+            lines.append(descriptor)
+
+    return lines
 
 
 def create_update_current_time_callback(timezone_str: Optional[str] = None):
@@ -759,19 +824,14 @@ class LlmAgentBuilder:
 
         if allow_pipeline_manipulation:
             pipeline_rules = agent.config.get("pipeline_rules", [])
-            if isinstance(pipeline_rules, list) and pipeline_rules:
-                rules_text = []
-                for rule in pipeline_rules:
-                    pipeline_name = rule.get("pipelineName") or rule.get("pipeline_name") or rule.get("pipelineId") or rule.get("pipeline_id") or "unknown pipeline"
-                    stage_name = rule.get("stageName") or rule.get("stage_name") or rule.get("stageId") or rule.get("stage_id")
-                    instructions = rule.get("instructions") or rule.get("description") or ""
-                    descriptor = f"{pipeline_name}"
-                    if stage_name:
-                        descriptor += f" → {stage_name}"
-                    if instructions:
-                        descriptor += f": {instructions}"
-                    rules_text.append(f"- {descriptor}")
-
+            rules_text = (
+                _format_pipeline_rules_for_prompt(pipeline_rules)
+                if isinstance(pipeline_rules, list)
+                else []
+            )
+            # Rules that render to nothing take the generic text: telling the
+            # model "no rule matches" under an empty list disables the tool.
+            if rules_text:
                 crm_tools_instructions.append(
                     "Pipeline Manipulation Tool: Available. Use this tool to assign the current conversation to a pipeline or move it between stages. "
                     "The conversation_id will be automatically extracted from the context. "
