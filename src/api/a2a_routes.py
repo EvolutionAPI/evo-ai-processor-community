@@ -1163,7 +1163,14 @@ async def handle_message_send(
                 },
             )
 
-        logger.error(f"❌ Agent execution error: {e}")
+        # CRM-236 review (5): the fallback is the COMMON path, because
+        # classification is conservative on purpose — so it is the path most
+        # likely to carry a credential. Provider errors echo the request URL
+        # (`?key=AIza…`), and this used to emit str(e) raw into both the log and
+        # `data.error`. redact_secrets already existed in this PR; it just was
+        # not applied where it mattered most.
+        safe = redact_secrets(str(e))
+        logger.error(f"❌ Agent execution error: {safe}")
         return error_response(
             request=request,
             code=map_status_to_error_code(status.HTTP_500_INTERNAL_SERVER_ERROR),
@@ -1175,7 +1182,7 @@ async def handle_message_send(
                 "error": {
                     "code": -32603,
                     "message": "Agent execution failed",
-                    "data": {"error": str(e)},
+                    "data": {"error": safe},
                 },
             }
         )
@@ -1186,7 +1193,7 @@ async def handle_message_send(
                 "error": {
                     "code": -32603,
                     "message": "Agent execution failed",
-                    "data": {"error": str(e)},
+                    "data": {"error": safe},
                 },
             }
         )

@@ -37,7 +37,7 @@ def test_quota_exhaustion_is_reported_as_rate_limit_not_as_our_bug():
     assert failure is not None, "the operator would still be hunting a phantom bug"
     assert failure.kind == "rate_limit"
     assert failure.http_status == 429
-    assert failure.jsonrpc_code == -32001
+    assert failure.jsonrpc_code == -32010
 
 
 def test_the_429_reaches_the_envelope_as_rate_limit_exceeded():
@@ -60,14 +60,31 @@ def test_high_demand_503_is_reported_as_unavailable():
     assert failure.http_status == 503
 
 
-def test_status_code_attribute_wins_over_text():
-    """An SDK that states 429 is stating it; text matching is only inference."""
+def test_status_code_wins_over_text_WITHIN_a_provider_exception():
+    """An SDK that states 429 is stating it; text matching is only inference.
+
+    Rewritten after the CRM-236 review. The original version asserted that ANY
+    exception carrying `status_code = 429` classified as a rate limit, which is
+    precisely the defect: httpx errors from our own services carry statuses too.
+    The status still wins over text — but only once the exception is known to
+    come from a provider.
+    """
 
     class SdkError(Exception):
+        __module__ = "litellm.exceptions"
         status_code = 429
 
     failure = classify_provider_error(SdkError("something went sideways"))
     assert failure is not None and failure.kind == "rate_limit"
+
+
+def test_a_bare_status_code_on_an_unknown_exception_classifies_nothing():
+    """The counterpart: no provider anchor, no classification."""
+
+    class MysteryError(Exception):
+        status_code = 429
+
+    assert classify_provider_error(MysteryError("something went sideways")) is None
 
 
 def test_rejected_credentials_are_not_an_internal_error():
@@ -148,3 +165,111 @@ def test_cause_chain_is_walked_but_bounded_by_a_cycle():
 
     failure = classify_provider_error(outer)
     assert failure is not None and failure.kind == "rate_limit"
+
+
+# --- CRM-236 review, finding 1: our own infrastructure is not the provider ----
+#
+# The first version trusted `status_code` on ANY link of the cause chain, with no
+# provider anchor. The runner calls raise_for_status() against internal services
+# (standard_runner.py:222 memory, :311 evo-kb-service), so their httpx errors
+# entered the chain and were classified: a knowledge-base outage was reported as
+# "The model provider is unavailable", and a wrong internal token as "The model
+# provider rejected our credentials" — the exact inversion of the bug this module
+# fixes.
+
+def _internal_http_error(status: int, url: str = "http://evo-kb-service:8080/search"):
+    import httpx
+
+    request = httpx.Request("POST", url)
+    response = httpx.Response(status, request=request)
+    return httpx.HTTPStatusError(f"Server error '{status}'", request=request, response=response)
+
+
+def _as_the_runner_wraps_it(exc: BaseException) -> BaseException:
+    inner = InternalServerError(str(exc))
+    inner.__cause__ = exc
+    outer = InternalServerError(str(inner))
+    outer.__cause__ = inner
+    return outer
+
+
+@pytest.mark.parametrize(
+    "status,what",
+    [
+        (503, "evo-kb-service is down"),
+        (502, "bad gateway from an internal service"),
+        (401, "KNOWLEDGE_SERVICE_API_TOKEN is wrong"),
+        (403, "internal service refused us"),
+        (429, "internal service rate-limited us"),
+    ],
+)
+def test_our_own_service_failing_is_not_reported_as_a_provider_outage(status, what):
+    assert classify_provider_error(_as_the_runner_wraps_it(_internal_http_error(status))) is None, what
+
+
+def test_an_internal_auth_failure_is_not_the_provider_rejecting_our_key():
+    exc = Exception(
+        "EvoAuth: HTTP error for POST /api/v1/auth/validate: 401 - "
+        '{"success":false,"error":{"code":"INVALID_TOKEN"}}'
+    )
+    assert classify_provider_error(_as_the_runner_wraps_it(exc)) is None
+
+
+# --- the anchored cases must still classify ----------------------------------
+
+def test_a_provider_sdk_status_still_classifies_without_any_text_marker():
+    """The anchor must not cost us the case status matching exists for."""
+
+    class LiteLLMError(Exception):
+        __module__ = "litellm.exceptions"
+        status_code = 429
+
+    failure = classify_provider_error(_as_the_runner_wraps_it(LiteLLMError("boom")))
+    assert failure is not None and failure.kind == "rate_limit"
+
+
+@pytest.mark.parametrize(
+    "text,kind",
+    [
+        (GEMINI_QUOTA_ERROR, "rate_limit"),
+        ("litellm.AuthenticationError: geminiException - API key not valid.", "auth"),
+        ("litellm: The model gemini-2.5-flash is overloaded. Please try again later.", "unavailable"),
+    ],
+)
+def test_real_provider_errors_survive_the_anchor(text, kind):
+    failure = classify_provider_error(_as_the_runner_wraps_it(Exception(text)))
+    assert failure is not None and failure.kind == kind
+
+
+# --- CRM-236 review, finding 4: no collision with the repo's A2A catalogue ----
+
+def test_the_jsonrpc_codes_do_not_collide_with_the_a2a_catalogue():
+    """src/schemas/a2a_types.py owns -32001..-32005 and a2a_routes.py emits them.
+
+    Reasoning about the reserved RANGE was not enough: an exhausted quota went on
+    the wire as "Task not found" to any conforming A2A client.
+    """
+    from src.schemas import a2a_types
+
+    taken = {
+        cls.model_fields["code"].default
+        for name, cls in vars(a2a_types).items()
+        if isinstance(cls, type)
+        and hasattr(cls, "model_fields")
+        and "code" in getattr(cls, "model_fields", {})
+        and isinstance(cls.model_fields["code"].default, int)
+    }
+
+    ours = set()
+    for text, _kind in [
+        (GEMINI_QUOTA_ERROR, "rate_limit"),
+        ("litellm: model is overloaded", "unavailable"),
+        ("litellm.AuthenticationError: API key not valid", "auth"),
+        ("litellm: This model's maximum context length is 8192 tokens", "context_length"),
+    ]:
+        failure = classify_provider_error(Exception(text))
+        assert failure is not None
+        ours.add(failure.jsonrpc_code)
+
+    assert ours, "no codes collected — the fixtures stopped classifying"
+    assert not (ours & taken), f"collides with the A2A catalogue: {sorted(ours & taken)}"

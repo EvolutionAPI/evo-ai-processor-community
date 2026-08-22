@@ -39,9 +39,18 @@ class ProviderFailure:
 
     kind: str  # rate_limit | unavailable | auth | context_length
     http_status: int
-    # JSON-RPC reserves -32000..-32099 for implementation-defined server
-    # errors, which is exactly what these are. -32603 (internal error) stays
-    # reserved for failures that really are ours.
+    # JSON-RPC reserves -32000..-32099 for implementation-defined server errors,
+    # which is exactly what these are. -32603 (internal error) stays reserved for
+    # failures that really are ours.
+    #
+    # The codes live at -3201x, NOT at the bottom of the range: src/schemas/
+    # a2a_types.py already owns -32001 TaskNotFound, -32002 TaskNotCancelable,
+    # -32003 PushNotificationNotSupported, -32004 UnsupportedOperation and
+    # -32005 ContentTypeNotSupported, and a2a_routes.py emits them. Reasoning
+    # about the reserved RANGE was not enough — an exhausted quota went on the
+    # wire as "Task not found" to any conforming A2A client, which is the
+    # opposite of this module's purpose. -32006..-32009 are left free so that
+    # catalogue can grow without colliding again.
     jsonrpc_code: int
     message: str
     detail: str
@@ -166,16 +175,138 @@ def _matches(haystack: str, markers) -> bool:
     return any(marker in haystack for marker in markers)
 
 
+# Evidence that an exception came from an LLM provider at all.
+#
+# CRM-236 review: the first version trusted `status_code` on ANY link of the
+# cause chain, with no provider anchor and with status taking precedence over
+# text. The runner calls `raise_for_status()` against internal services
+# (standard_runner.py:222 memory, :311 evo-kb-service), so their httpx errors
+# entered the chain and were classified — a knowledge-base outage was reported
+# as "The model provider is unavailable", and a wrong internal API token as
+# "The model provider rejected our credentials".
+#
+# That is the exact inversion of the bug this module exists to fix: the care
+# went into the text markers, none into the status match.
+#
+# The design choice here is to require an anchor rather than to blacklist
+# internal hosts. A blacklist rots — every new internal service has to be
+# remembered, and forgetting one silently reintroduces the inversion. Requiring
+# positive evidence fails in the safe direction that this module already
+# committed to: no anchor means no classification, and the response stays the
+# honest 500.
+_PROVIDER_MODULES = (
+    "litellm",
+    "openai",
+    "anthropic",
+    "google.genai",
+    "google.generativeai",
+    "google.api_core",
+    "vertexai",
+    "cohere",
+    "mistralai",
+    "groq",
+    "boto3",
+    "botocore",
+)
+
+_PROVIDER_CLASS_MARKERS = (
+    "litellm",
+    "openai",
+    "anthropic",
+    "vertexai",
+    "gemini",
+    "bedrock",
+    "cohere",
+)
+
+# Text fingerprints. Deliberately specific: provider host names and SDK prefixes,
+# never a bare vendor word like "google", which appears in unrelated URLs.
+_PROVIDER_TEXT_MARKERS = (
+    "litellm",
+    "vertexaiexception",
+    "geminiexception",
+    "generativelanguage.googleapis.com",
+    "aiplatform.googleapis.com",
+    "api.openai.com",
+    "api.anthropic.com",
+    "api.mistral.ai",
+    "api.cohere.ai",
+    "bedrock-runtime",
+    "resource_exhausted",
+    "gemini-",
+    "gpt-",
+    "claude-",
+)
+
+
+# Wording that ONLY an LLM provider produces, so it anchors on its own.
+#
+# The distinction that matters is between markers that are unambiguous and
+# markers that are not. "resource_exhausted" or "maximum context length" cannot
+# come from evo-kb-service; "rate limit", "too many requests", "service
+# unavailable" and a bare 429/503 absolutely can. The first group anchors by
+# itself, the second needs separate evidence — which is what kept a
+# knowledge-base outage from being reported as a provider outage.
+_SELF_ANCHORING_MARKERS = (
+    "resource_exhausted",
+    "resource exhausted",
+    "resourceexhausted",
+    "quota exceeded",
+    "exceeded your current quota",
+    "insufficient_quota",
+    "api key not valid",
+    "invalid api key",
+    "invalid_api_key",
+    "api_key_invalid",
+    "model is overloaded",
+    "overloaded",
+    "high demand",
+    "maximum context length",
+    "context_length_exceeded",
+    "contextwindowexceeded",
+    "request payload size exceeds",
+    "ratelimiterror",
+    "authenticationerror",
+    "apiconnectionerror",
+    "apitimeouterror",
+)
+
+
+def _provider_anchored(exc: BaseException) -> bool:
+    """Is there positive evidence that this exception came from an LLM provider?"""
+    module = (getattr(type(exc), "__module__", "") or "").lower()
+    if any(marker in module for marker in _PROVIDER_MODULES):
+        return True
+
+    name = type(exc).__name__.lower()
+    if any(marker in name for marker in _PROVIDER_CLASS_MARKERS):
+        return True
+
+    haystack = f"{name} {exc}".lower()
+    if any(marker in haystack for marker in _SELF_ANCHORING_MARKERS):
+        return True
+
+    return any(marker in haystack for marker in _PROVIDER_TEXT_MARKERS)
+
+
 def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
     """Recognise a provider-side failure, or return None to keep the 500.
 
-    Status codes win over text: an SDK that sets `status_code = 429` is stating
-    the condition, whereas text matching is inference.
+    A link is only considered when it is provider-anchored (see
+    _provider_anchored). Within an anchored link, status codes win over text: an
+    SDK that sets `status_code = 429` is stating the condition, whereas text
+    matching is inference.
     """
     if exc is None:
         return None
 
     for link in _cause_chain(exc):
+        # Without this, an httpx error from one of OUR services (evo-kb-service,
+        # the memory service, EvoAuth) carries a 5xx/401 into the chain and gets
+        # reported as a provider outage. See _provider_anchored.
+        if not _provider_anchored(link):
+            continue
+
         haystack = f"{type(link).__name__} {link}".lower()
         status = _status_code_of(link)
 
@@ -183,7 +314,7 @@ def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
             return _build(
                 "rate_limit",
                 429,
-                -32001,
+                -32010,
                 "The model provider refused the request: rate limit or quota exhausted.",
                 link,
             )
@@ -192,7 +323,7 @@ def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
             return _build(
                 "unavailable",
                 503,
-                -32002,
+                -32011,
                 "The model provider is unavailable or overloaded.",
                 link,
             )
@@ -201,7 +332,7 @@ def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
             return _build(
                 "auth",
                 502,
-                -32004,
+                -32012,
                 "The model provider rejected our credentials.",
                 link,
             )
@@ -210,7 +341,7 @@ def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
             return _build(
                 "context_length",
                 413,
-                -32005,
+                -32013,
                 "The request exceeded the model's context window.",
                 link,
             )
