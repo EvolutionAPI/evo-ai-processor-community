@@ -100,21 +100,10 @@ def get_datetime_in_timezone(timezone_str: Optional[str] = None) -> datetime:
 def _format_pipeline_rules_for_prompt(pipeline_rules: List[Dict[str, Any]]) -> List[str]:
     """Render the agent's pipeline rules as prompt lines, one per STAGE.
 
-    The stages live inside each rule, not on the rule itself — the frontend
-    saves ``PipelineRule { pipelineId, pipelineName, generalInstructions,
-    stages: StageRule[] }`` with ``StageRule { stageId, stageName,
-    instructions }`` (see PipelineRules.tsx). Reading ``stageName``/
-    ``instructions`` off the rule yielded a prompt with the funnel name and
-    nothing else: no stage names, no stage ids, and none of the per-stage
-    "when to move" instructions the operator configured. Since the prompt also
-    tells the model "do not move conversations between stages without a
-    matching rule", an empty rule set means the model never moves the card —
-    and ``pipeline_manipulation`` answers "stage_id or stage_name is required"
-    when it is called blind. The tool itself always read ``rule["stages"]``
-    correctly; only this prompt side was wrong.
-
-    Legacy/flat shapes (``stageName`` at the rule level) are still rendered so
-    a config saved by an older UI keeps working.
+    The stages live inside each rule (``rule["stages"]``), not on the rule
+    itself, and each line carries the ids the tool needs. A stage with no
+    ``stageId`` is dropped: the model cannot call the tool without one, and
+    listing it only invites an invented stage name.
     """
     lines: List[str] = []
 
@@ -144,25 +133,28 @@ def _format_pipeline_rules_for_prompt(pipeline_rules: List[Dict[str, Any]]) -> L
             for stage in stages:
                 if not isinstance(stage, dict):
                     continue
-                stage_name = stage.get("stageName") or stage.get("stage_name") or ""
                 stage_id = stage.get("stageId") or stage.get("stage_id") or ""
+                if not stage_id:
+                    # Half-configured stage: the operator wrote the criteria and
+                    # never picked the stage in the select.
+                    logger.warning(f"pipeline rule stage without stageId, skipped: {stage}")
+                    continue
+                stage_name = stage.get("stageName") or stage.get("stage_name") or stage_id
                 instructions = stage.get("instructions") or stage.get("description") or ""
 
-                # The model needs the id to call the tool and the instructions
-                # to know WHEN — a stage without either is not actionable.
-                descriptor = f"    - Stage: {stage_name or stage_id or 'unnamed stage'}"
-                if stage_id:
-                    descriptor += f" (stage_id: {stage_id})"
+                descriptor = f"    - Stage: {stage_name} (stage_id: {stage_id})"
                 if instructions:
                     descriptor += f" — move here when: {instructions}"
                 lines.append(descriptor)
             continue
 
-        # Legacy flat rule: the stage sat on the rule itself.
-        legacy_stage = rule.get("stageName") or rule.get("stage_name") or rule.get("stageId") or rule.get("stage_id")
+        # Legacy flat rule: the stage sat on the rule itself. Without an id it is
+        # unreachable anyway -- the tool resolves a name through rule["stages"].
+        legacy_id = rule.get("stageId") or rule.get("stage_id") or ""
+        legacy_name = rule.get("stageName") or rule.get("stage_name") or legacy_id
         legacy_instructions = rule.get("instructions") or rule.get("description") or ""
-        if legacy_stage:
-            descriptor = f"    - Stage: {legacy_stage}"
+        if legacy_id:
+            descriptor = f"    - Stage: {legacy_name} (stage_id: {legacy_id})"
             if legacy_instructions:
                 descriptor += f" — move here when: {legacy_instructions}"
             lines.append(descriptor)
@@ -832,9 +824,14 @@ class LlmAgentBuilder:
 
         if allow_pipeline_manipulation:
             pipeline_rules = agent.config.get("pipeline_rules", [])
-            if isinstance(pipeline_rules, list) and pipeline_rules:
-                rules_text = _format_pipeline_rules_for_prompt(pipeline_rules)
-
+            rules_text = (
+                _format_pipeline_rules_for_prompt(pipeline_rules)
+                if isinstance(pipeline_rules, list)
+                else []
+            )
+            # Rules that render to nothing take the generic text: telling the
+            # model "no rule matches" under an empty list disables the tool.
+            if rules_text:
                 crm_tools_instructions.append(
                     "Pipeline Manipulation Tool: Available. Use this tool to assign the current conversation to a pipeline or move it between stages. "
                     "The conversation_id will be automatically extracted from the context. "
