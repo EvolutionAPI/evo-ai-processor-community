@@ -1,20 +1,9 @@
 """The agent's pipeline rules must reach the model with their STAGES.
 
-The frontend saves (PipelineRules.tsx):
-
-    PipelineRule { pipelineId, pipelineName, generalInstructions, stages: StageRule[] }
-    StageRule    { stageId, stageName, instructions }
-
 The prompt builder used to read ``stageName``/``instructions`` off the RULE,
-where they do not exist, so a fully configured funnel rendered as a single
-line with the funnel name. Since the same prompt tells the model "do not move
-conversations between stages without a matching rule", the model had nothing
-to match and never moved the card — the reported "the AI freezes and does not
-execute". ``pipeline_manipulation`` always read ``rule["stages"]`` correctly;
-only the prompt side was wrong.
-
-These tests pin the contract on the side that was broken, using the exact
-shape the UI writes.
+where the frontend never writes them (they live in ``rule["stages"]``), so a
+configured funnel rendered as a single line with the funnel name and the model
+had no stage to move to. These tests pin the shape the UI actually writes.
 """
 
 from src.services.adk.agents.llm_agent_builder import _format_pipeline_rules_for_prompt
@@ -83,12 +72,13 @@ class TestPipelineRulesReachTheModel:
 
 
 class TestEdgeShapes:
-    def test_legacy_flat_rule_still_renders(self):
+    def test_legacy_flat_rule_still_renders_with_its_id(self):
         # A config written by an older UI kept the stage on the rule itself.
         legacy = [
             {
                 "pipelineId": "pipe-9",
                 "pipelineName": "Antigo",
+                "stageId": "stg-ganho",
                 "stageName": "Ganho",
                 "instructions": "quando fechar",
             }
@@ -97,24 +87,37 @@ class TestEdgeShapes:
         text = "\n".join(_format_pipeline_rules_for_prompt(legacy))
 
         assert "Ganho" in text
+        assert "stg-ganho" in text
         assert "quando fechar" in text
 
-    def test_legacy_flat_rule_exposes_its_stage_id(self):
-        # Without the id the model has nothing legal to pass: the instruction
-        # demands a stage_id and forbids inventing one.
-        legacy = [
+    def test_stage_without_an_id_is_dropped(self):
+        # The operator wrote the criteria but never picked the stage, so the UI
+        # saved stageId="". Listing it makes the model invent a stage name --
+        # the very failure this module guards against.
+        half_configured = [
             {
-                "pipelineId": "pipe-9",
-                "pipelineName": "Antigo",
-                "stageName": "Ganho",
-                "stageId": "stg-ganho",
-                "instructions": "quando fechar",
+                "pipelineId": "pipe-1",
+                "pipelineName": "Vendas",
+                "stages": [
+                    {"stageId": "", "stageName": "", "instructions": "quando fechar"},
+                    {"stageId": "stg-ok", "stageName": "Ok", "instructions": "quando abrir"},
+                ],
             }
         ]
 
-        text = "\n".join(_format_pipeline_rules_for_prompt(legacy))
+        lines = _format_pipeline_rules_for_prompt(half_configured)
 
-        assert "stg-ganho" in text
+        assert not any("quando fechar" in line for line in lines)
+        assert any("stg-ok" in line for line in lines)
+
+    def test_legacy_rule_without_an_id_is_dropped(self):
+        # Same reasoning, flat shape: the tool resolves a stage name through
+        # rule["stages"], which a flat rule does not have.
+        lines = _format_pipeline_rules_for_prompt(
+            [{"pipelineId": "p", "pipelineName": "Antigo", "stageName": "Ganho"}]
+        )
+
+        assert not any("Ganho" in line for line in lines)
 
     def test_rule_without_stages_still_names_the_pipeline(self):
         text = "\n".join(_format_pipeline_rules_for_prompt([{"pipelineId": "p", "pipelineName": "Só o funil"}]))

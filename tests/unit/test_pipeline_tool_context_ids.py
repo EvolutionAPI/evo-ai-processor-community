@@ -1,13 +1,4 @@
-"""The conversation/contact a turn belongs to come from the CONTEXT, not the model.
-
-CRM-237: `conversation_id` and `contact_id` are declared as tool parameters, so
-the model fills them in — and the contact UUID sits in the ContactInfo block
-injected into the prompt. In a live run the model sent the CONTACT id as
-`conversation_id`; the CRM answered 400 CONVERSATION_NOT_FOUND and the card
-never moved. The prompt already promises the id is taken from the context
-("The conversation_id will be automatically extracted from the context"), so
-the metadata must win.
-"""
+"""CRM-237: the context's conversation/contact must win over the ids the model sends."""
 
 import pytest
 
