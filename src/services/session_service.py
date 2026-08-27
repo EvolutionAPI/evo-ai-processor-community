@@ -46,6 +46,9 @@ from src.schemas.schemas import SessionMetadataCreate, SessionMetadataUpdate
 from src.models.models import ExecutionMetrics
 from src.schemas.schemas import ExecutionMetricsCreate
 from src.models.models import Agent
+# CRM-362: the bound tenant, if any. Community returns None (inert); the
+# enterprise overlay returns the real tenant so the row is written tenant-scoped.
+from src.evo_extension_points import runtime_context
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +449,7 @@ def create_session_metadata(
     try:
         db_metadata = SessionMetadata(
             session_id=session_id,
+            tenant_id=runtime_context.current_context_id(),
             name=metadata_data.name,
             description=metadata_data.description,
             tags=metadata_data.tags or [],
@@ -532,6 +536,7 @@ def create_execution_metrics(
     """Create execution metrics for a session"""
     try:
         db_metrics = ExecutionMetrics(
+            tenant_id=runtime_context.current_context_id(),
             agent_id=metrics_data.agent_id,
             session_id=metrics_data.session_id,
             user_id=metrics_data.user_id,

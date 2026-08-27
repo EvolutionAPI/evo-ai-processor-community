@@ -276,6 +276,8 @@ class Session(Base):
     __tablename__ = "evo_ai_agent_processor_sessions"
 
     id = Column(String, primary_key=True)
+    # CRM-362: tenant scoping (see ExecutionMetrics.tenant_id).
+    tenant_id = Column(UUID(as_uuid=True), nullable=True)
     app_name = Column(String)
     user_id = Column(String)
     state = Column(JSON)
@@ -287,6 +289,8 @@ class SessionMetadata(Base):
     __tablename__ = "evo_ai_agent_processor_session_metadata"
 
     session_id = Column(String, primary_key=True)
+    # CRM-362: tenant scoping (see ExecutionMetrics.tenant_id).
+    tenant_id = Column(UUID(as_uuid=True), nullable=True)
     name = Column(String, nullable=True)
     description = Column(Text, nullable=True)
     tags = Column(JSON, nullable=True, default=[])
@@ -363,6 +367,10 @@ class ExecutionMetrics(Base):
     __tablename__ = "evo_ai_agent_processor_execution_metrics"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # CRM-362: tenant scoping column. Nullable + inert in community (the runtime
+    # context returns None); the enterprise overlay fills it from the bound
+    # tenant and the licensing reconciler enforces NOT NULL + forced RLS on top.
+    tenant_id = Column(UUID(as_uuid=True), nullable=True)
     agent_id = Column(UUID(as_uuid=True), ForeignKey("evo_core_agents.id", ondelete="CASCADE"))
     session_id = Column(String, nullable=False)
     user_id = Column(String, nullable=False)
