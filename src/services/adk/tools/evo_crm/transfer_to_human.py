@@ -5,12 +5,32 @@ This tool allows agents to transfer conversations to human agents,
 following transfer rules and best practices.
 """
 
-from typing import Optional, Dict, Any, List
+import re
+from typing import Optional, Dict, Any, List, Set
 from google.adk.tools import FunctionTool, ToolContext
 from src.services.adk.tools.evo_crm.base import EvoCrmClient
 from src.utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# Common PT/EN words that appear in almost any transfer-rule instructions or
+# reason text (articles, prepositions, generic customer-service vocabulary).
+# Excluding them prevents a coincidental match on e.g. "cliente"/"para"/
+# "informações" from selecting an unrelated rule (EVO-2247).
+_STOPWORDS: Set[str] = {
+    "para", "sobre", "quando", "cliente", "solicitar", "informações",
+    "informacoes", "assuntos", "outros", "relacionados", "pedir", "pediu",
+    "quiser", "envie", "mensagem", "antes", "trasnferir", "transferir",
+    "instant", "the", "and", "for", "with", "about", "customer", "when",
+    "requests", "requested", "other", "related", "issues", "before",
+}
+
+
+def _tokenize(text: str) -> Set[str]:
+    """Lowercase word tokens (letters only, length > 3) from free text."""
+    return {word for word in _WORD_RE.findall(text.lower()) if len(word) > 3}
 
 
 def _extract_conversation_id_from_metadata(tool_context: Optional[ToolContext]) -> Optional[str]:
@@ -156,35 +176,60 @@ def create_transfer_to_human_tool(
             effective_team_id = team_id
             
             if not effective_assignee_id and not effective_team_id and available_transfer_rules:
+                # An explicit rule_index that doesn't resolve to a configured
+                # rule is a contract failure, not "no preference" — report it
+                # instead of silently falling through to keyword matching or
+                # the first rule, which would hide the model's mistake behind
+                # a transfer to a possibly-wrong team.
+                if rule_index is not None and not (1 <= rule_index <= len(available_transfer_rules)):
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"rule_index {rule_index} is out of range — this agent has "
+                            f"{len(available_transfer_rules)} configured transfer rule(s), "
+                            f"numbered 1-{len(available_transfer_rules)}."
+                        ),
+                        "conversation_id": effective_conversation_id,
+                    }
+
                 selected_rule = None
 
                 # Preferred path: the model picked a specific rule from the
                 # numbered list in its own docstring (see transfer_rules_doc).
-                if rule_index is not None and 1 <= rule_index <= len(available_transfer_rules):
+                if rule_index is not None:
                     selected_rule = available_transfer_rules[rule_index - 1]
                     logger.info(f"Using transfer rule #{rule_index} selected by the model")
 
                 # No explicit index: previously this silently fell back to
                 # "the first rule with a valid team/user", which routed EVERY
                 # transfer to whichever rule happened to be listed first,
-                # regardless of the actual reason (EVO-2247). Instead, try to
-                # match the model's reason against each rule's own
-                # instructions text before giving up and using the first one.
+                # regardless of the actual reason (EVO-2247). Instead, score
+                # each rule by how many meaningful (non-stopword) keywords it
+                # shares with the reason, and take the best-scoring rule —
+                # not just the first one with any overlap at all, since a
+                # single generic word (e.g. "cliente", "para") appearing in
+                # an unrelated rule's instructions would otherwise misroute.
                 if selected_rule is None and reason:
-                    reason_lower = reason.lower()
+                    reason_words = {
+                        word for word in _tokenize(reason) if word not in _STOPWORDS
+                    }
+                    best_rule = None
+                    best_score = 0
                     for rule in available_transfer_rules:
-                        instructions = (rule.get("instructions") or "").lower()
-                        if instructions and any(
-                            word in instructions
-                            for word in reason_lower.split()
-                            if len(word) > 3
-                        ):
-                            selected_rule = rule
-                            logger.info(
-                                "Matched transfer rule by keyword overlap between "
-                                "reason and instructions"
-                            )
-                            break
+                        instruction_words = {
+                            word for word in _tokenize(rule.get("instructions") or "")
+                            if word not in _STOPWORDS
+                        }
+                        score = len(reason_words & instruction_words)
+                        if score > best_score:
+                            best_score = score
+                            best_rule = rule
+                    if best_rule is not None:
+                        selected_rule = best_rule
+                        logger.info(
+                            f"Matched transfer rule by keyword overlap "
+                            f"(score={best_score}) between reason and instructions"
+                        )
 
                 if selected_rule is None:
                     selected_rule = next(
