@@ -71,6 +71,31 @@ def _normalize_labels(raw: Any) -> List[str]:
     return []
 
 
+async def _fetch_catalog_labels(client: EvoCrmClient) -> List[str]:
+    """Fetch the account's real Label catalog (Settings > Labels), not the
+    free-form conversation tag list. Conversation tagging (acts_as_taggable_on)
+    accepts any string with no relation to this catalog, so without this
+    check the model could tag conversations with labels that were never
+    created in Settings — invisible there, uncolored, and absent from any
+    label-based filter (EVO-2248).
+    """
+    try:
+        response = await client.get(endpoint="/labels", params={"per_page": 200})
+    except Exception as api_error:
+        logger.error(f"Failed to load label catalog: {api_error}")
+        return []
+
+    data = response.get("data") if isinstance(response, dict) else None
+    if not isinstance(data, list):
+        return []
+
+    titles = []
+    for item in data:
+        if isinstance(item, dict) and item.get("title"):
+            titles.append(str(item["title"]))
+    return titles
+
+
 def _coerce_input_list(value: Any) -> List[str]:
     """Accept either a single string or a list, return a deduped list of strings."""
     if value is None:
@@ -236,22 +261,61 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
                     "action": "add",
                 }
 
+            # Only labels that already exist in the account's Label catalog
+            # (Settings > Labels) may be applied — conversation tagging accepts
+            # any free-form string with no relation to that catalog, so
+            # without this check the model could invent labels that are
+            # invisible in Settings, uncolored, and absent from label filters
+            # (EVO-2248).
+            catalog_labels = await _fetch_catalog_labels(client)
+            catalog_by_lower = {title.lower(): title for title in catalog_labels}
+
+            valid_requested = []
+            rejected = []
+            for label in requested:
+                catalog_title = catalog_by_lower.get(label.lower())
+                if catalog_title:
+                    valid_requested.append(catalog_title)
+                else:
+                    rejected.append(label)
+
+            if rejected and not catalog_labels:
+                # Catalog fetch failed — don't silently reject everything;
+                # surface the failure instead of pretending no labels exist.
+                return {
+                    "status": "error",
+                    "message": (
+                        "Could not load the account's label catalog to validate the "
+                        "requested label(s), so nothing was added. Please retry."
+                    ),
+                    "conversation_id": effective_conversation_id,
+                    "action": "add",
+                }
+
             merged = list(current_labels)
             added: List[str] = []
-            for label in requested:
+            for label in valid_requested:
                 if label.lower() not in existing_set:
                     merged.append(label)
                     existing_set[label.lower()] = label
                     added.append(label)
 
             if not added:
+                message = "All requested labels were already present; nothing to update."
+                if rejected:
+                    message = (
+                        f"None of the requested label(s) exist in the account's label "
+                        f"catalog: {', '.join(rejected)}. Only pre-existing labels can "
+                        f"be applied — create them in Settings > Labels first."
+                    )
                 return {
-                    "status": "success",
-                    "message": "All requested labels were already present; nothing to update.",
+                    "status": "success" if not rejected else "error",
+                    "message": message,
                     "conversation_id": effective_conversation_id,
                     "action": "add",
                     "labels": current_labels,
                     "added": [],
+                    "rejected": rejected,
                 }
 
             payload = {"labels": merged}
@@ -305,13 +369,20 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
                 f"Added labels {added} to conversation {effective_conversation_id}; "
                 f"now has {resulting_labels}"
             )
+            message = f"Added {len(added)} label(s) to the conversation."
+            if rejected:
+                message += (
+                    f" Skipped label(s) not in the account's catalog: "
+                    f"{', '.join(rejected)}."
+                )
             return {
                 "status": "success",
-                "message": f"Added {len(added)} label(s) to the conversation.",
+                "message": message,
                 "conversation_id": effective_conversation_id,
                 "action": "add",
                 "labels": resulting_labels,
                 "added": added,
+                "rejected": rejected,
             }
 
         logger.info(
@@ -335,13 +406,22 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
       - add:    appends one or more labels, preserving existing ones
       - remove: removes one or more labels, preserving the rest
 
+    IMPORTANT: `add` only accepts labels that already exist in the account's
+    label catalog (Settings > Labels) — it will NOT invent a new label. If a
+    requested title doesn't match an existing label (case-insensitive), it is
+    skipped and reported back in `rejected`. If you're unsure which labels
+    exist, ask the user or check with your operator; do not guess a title
+    that wasn't explicitly configured.
+
     Args:
         action: "list" | "add" | "remove"
         labels: label title or list of titles (required for add/remove)
         conversation_id: optional UUID, auto-extracted from context when omitted
 
     Returns:
-        Dictionary with action result and the resulting label list.
+        Dictionary with action result and the resulting label list. For
+        `add`, also includes `rejected`: titles that were skipped because
+        they don't exist in the account's label catalog.
     """
 
     return FunctionTool(func=manage_conversation_labels)
