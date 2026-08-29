@@ -101,6 +101,85 @@ def test_context_window_overflow_is_recognised():
     assert failure is not None and failure.kind == "context_length"
 
 
+# --- CRM-424: a retired/obsolete model is actionable, not a recurring 500 ------
+
+def test_gemini_retired_model_is_reported_as_model_not_found():
+    # Verbatim shape of what the Gemini API returns for a model that was removed.
+    err = (
+        "litellm.NotFoundError: geminiException - models/gemini-2.5-flash-preview-05-20 "
+        "is not found for API version v1beta, or is not supported for generateContent."
+    )
+    wrapped = InternalServerError(err)
+    wrapped.__cause__ = Exception(err)
+
+    failure = classify_provider_error(wrapped)
+
+    assert failure is not None, "a dead model must not read as a bug in our code"
+    assert failure.kind == "model_not_found"
+    assert failure.jsonrpc_code == -32014
+    assert "deprecated" in failure.message.lower() or "renamed" in failure.message.lower()
+
+
+def test_openai_missing_model_is_model_not_found():
+    # Verbatim: OpenAI always appends the access clause, and it is that clause —
+    # not a bare "does not exist" — that makes the marker safe to match on.
+    failure = classify_provider_error(
+        Exception(
+            "litellm.NotFoundError: The model `gpt-foo` does not exist or you do not "
+            "have access to it."
+        )
+    )
+    assert failure is not None and failure.kind == "model_not_found"
+
+
+def test_a_bare_provider_404_still_classifies_once_nothing_else_explains_it():
+    """Some SDKs carry the status and nothing quotable in the text."""
+
+    class GeminiError(Exception):
+        status_code = 404
+
+    failure = classify_provider_error(GeminiError("model gemini-2.0-pro not available"))
+    assert failure is not None and failure.kind == "model_not_found"
+
+
+def test_the_model_error_does_not_answer_404_on_a_route_where_404_means_agent():
+    """`POST /a2a/{agent_id}` already answers 404 for an agent that does not exist,
+    and map_status_to_error_code turns any 404 into NOT_FOUND. Returning the
+    provider's 404 verbatim would make a dead model indistinguishable from a dead
+    agent — the same confusion that pushed `auth` to 502 instead of 401."""
+    failure = classify_provider_error(
+        Exception("litellm.NotFoundError: The model `gpt-foo` does not exist or you "
+                  "do not have access to it.")
+    )
+    assert failure is not None
+    assert failure.http_status == 502
+    assert map_status_to_error_code(failure.http_status) != "NOT_FOUND"
+
+
+# --- a 404 must not swallow the diagnosis the text already carries -------------
+
+def test_a_404_carrying_credential_wording_is_still_auth():
+    """The status is the weaker signal when the two disagree. While the bare-404
+    check ran first, a revoked key sent the operator to change the agent's model."""
+
+    class GeminiError(Exception):
+        status_code = 404
+
+    failure = classify_provider_error(
+        GeminiError("API key not valid. Please pass a valid API key.")
+    )
+    assert failure is not None and failure.kind == "auth"
+
+
+def test_a_context_overflow_that_also_says_does_not_exist_is_context_length():
+    failure = classify_provider_error(
+        Exception(
+            "litellm: maximum context length is 8192 tokens; tool `x` does not exist"
+        )
+    )
+    assert failure is not None and failure.kind == "context_length"
+
+
 # --- the part that must NOT fire ----------------------------------------------
 
 def test_a_genuine_bug_in_our_code_stays_a_500():
@@ -109,6 +188,20 @@ def test_a_genuine_bug_in_our_code_stays_a_500():
     assert classify_provider_error(NameError("name 'foo' is not defined")) is None
     assert classify_provider_error(KeyError("contact_id")) is None
     assert classify_provider_error(ValueError("invalid literal for int()")) is None
+
+
+def test_our_own_bug_is_not_a_dead_model_just_because_it_names_one():
+    """_provider_anchored accepts any text carrying a model name, so the moment a
+    marker as loose as "does not exist" was added, our own lookups classified as a
+    provider fault. The bug reads as OUR 500 again only while the markers stay
+    verbatim."""
+    assert classify_provider_error(KeyError("gpt-4.1-mini does not exist")) is None
+    assert classify_provider_error(
+        Exception("agent config for gemini-2.5-flash does not exist in the database")
+    ) is None
+    assert classify_provider_error(
+        Exception("litellm.NotFoundError: No such File object: file-abc for gpt-4o")
+    ) is None
 
 
 def test_our_own_wrapper_name_does_not_read_as_a_provider_outage():

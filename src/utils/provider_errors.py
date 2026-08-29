@@ -26,7 +26,7 @@ _MAX_CAUSE_DEPTH = 6
 class ProviderFailure:
     """A provider-side condition worth reporting verbatim to the operator."""
 
-    kind: str  # rate_limit | unavailable | auth | context_length
+    kind: str  # rate_limit | unavailable | model_not_found | auth | context_length
     http_status: int
     # -3201x, not the bottom of the reserved -32000..-32099 range: a2a_types.py
     # already owns -32001..-32005 and a2a_routes.py emits them, so a quota error
@@ -150,6 +150,26 @@ _CONTEXT_MARKERS = (
     "request payload size exceeds",
 )
 
+# A configured model the provider no longer serves. Gemini answers "models/… is not
+# found for API version …, or is not supported for generateContent"; OpenAI answers
+# "The model `…` does not exist or you do not have access to it". Without this the
+# 404 fell through to a generic 500 and the same agent failed on EVERY turn with no
+# hint that its model was simply gone — the recurring silent failure of CRM-424. The
+# catalogue no longer OFFERS retired models (core-service models_fetcher), but an
+# agent configured before the retirement still points at one.
+#
+# Only verbatim provider wording belongs here. A bare "does not exist" matches our
+# own KeyErrors just as well, and _provider_anchored accepts any text carrying a
+# model name — so the loose variant reported OUR bugs as a provider fault, the exact
+# inversion this module exists to prevent. Everything vaguer is left to the 404
+# status check at the bottom of classify_provider_error.
+_MODEL_MARKERS = (
+    "not found for api version",
+    "is not supported for generatecontent",
+    "does not exist or you do not have access",
+    "model_not_found",
+)
+
 
 def _matches(haystack: str, markers) -> bool:
     return any(marker in haystack for marker in markers)
@@ -230,6 +250,8 @@ _SELF_ANCHORING_MARKERS = (
     "authenticationerror",
     "apiconnectionerror",
     "apitimeouterror",
+    "is not found for api version",
+    "is not supported for generatecontent",
 )
 
 
@@ -289,6 +311,18 @@ def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
                 link,
             )
 
+        # Verbatim provider wording for a model that is gone. Ahead of auth because
+        # none of these phrases can mean a credential problem.
+        if _matches(haystack, _MODEL_MARKERS):
+            return _build(
+                "model_not_found",
+                502,
+                -32014,
+                "The configured model is unavailable — the provider has renamed or "
+                "deprecated it. Pick a current model in the agent settings.",
+                link,
+            )
+
         if status in (401, 403) or _matches(haystack, _AUTH_MARKERS):
             return _build(
                 "auth",
@@ -304,6 +338,21 @@ def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
                 413,
                 -32013,
                 "The request exceeded the model's context window.",
+                link,
+            )
+
+        # Last resort: a 404 the branches above could not explain. The weakest
+        # signal in the module — the same status covers a wrong api_base and a
+        # deleted non-model resource — so it only speaks once nothing quotable
+        # matched, and it says so instead of asserting the model is dead.
+        if status == 404:
+            return _build(
+                "model_not_found",
+                502,
+                -32014,
+                "The provider answered 404: the model configured for this agent is "
+                "most likely gone. Check the model, and the base URL if this key "
+                "points at a custom endpoint.",
                 link,
             )
 
