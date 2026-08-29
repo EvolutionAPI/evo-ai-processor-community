@@ -89,6 +89,7 @@ def create_transfer_to_human_tool(
         team_id: Optional[str] = None,
         rule_index: Optional[int] = None,
         reason: Optional[str] = None,
+        message_to_customer: Optional[str] = None,
         tool_context: Optional[ToolContext] = None,
     ) -> Dict[str, Any]:
         """Transfer a conversation to a human agent.
@@ -224,7 +225,39 @@ def create_transfer_to_human_tool(
                 + (f" (team: {effective_team_id})" if effective_team_id else "")
                 + (f" - Reason: {reason}" if reason else "")
             )
-            
+
+            # Send the customer-facing notice BEFORE assigning, so it doesn't
+            # depend on the model also producing text in the same turn (it
+            # often doesn't when it's already decided to call tools) — every
+            # transfer rule's own instructions say to notify the customer
+            # first, so make that guaranteed rather than hoped-for (EVO-2249).
+            message_send_error = None
+            if message_to_customer and message_to_customer.strip():
+                formatted_message = message_to_customer.strip()
+                if not formatted_message.startswith("<"):
+                    formatted_message = f"<p>{formatted_message}</p>"
+                try:
+                    await client.post(
+                        endpoint=f"/conversations/{effective_conversation_id}/messages",
+                        json_data={
+                            "content": formatted_message,
+                            "message_type": "outgoing",
+                            "private": False,
+                        },
+                    )
+                    logger.info(
+                        f"Sent customer-facing transfer notice to conversation {effective_conversation_id}"
+                    )
+                except Exception as message_error:
+                    # Don't block the transfer on a failed notice — better the
+                    # customer gets routed without the message than not routed
+                    # at all — but surface the failure in the result.
+                    message_send_error = str(message_error)
+                    logger.error(
+                        f"Failed to send transfer notice to conversation "
+                        f"{effective_conversation_id}: {message_send_error}"
+                    )
+
             # Prepare request body
             request_body: Dict[str, Any] = {}
             
@@ -274,7 +307,13 @@ def create_transfer_to_human_tool(
                 
                 if reason:
                     success_message += f". Reason: {reason}"
-                
+
+                message_to_customer_sent = bool(message_to_customer) and not message_send_error
+                if message_to_customer_sent:
+                    success_message += ". Customer was notified before the transfer."
+                elif message_send_error:
+                    success_message += f". WARNING: failed to notify the customer first: {message_send_error}"
+
                 return {
                     "status": "success",
                     "message": success_message,
@@ -282,6 +321,8 @@ def create_transfer_to_human_tool(
                     "assignee_id": effective_assignee_id,
                     "team_id": effective_team_id,
                     "reason": reason,
+                    "message_to_customer_sent": message_to_customer_sent,
+                    "message_to_customer_error": message_send_error,
                     "details": response,
                 }
                 
@@ -356,6 +397,13 @@ def create_transfer_to_human_tool(
     it risks the wrong team. Otherwise, provide assignee_id or team_id
     explicitly.{transfer_rules_doc}
 
+    IMPORTANT: if the matched rule's instructions say to notify the customer before
+    transferring (most do), you MUST pass message_to_customer with that notice — do
+    NOT rely on separately replying with text in the same turn, since when you call
+    tools you often don't also produce a customer-facing message, and the transfer
+    would then happen silently. Passing message_to_customer here guarantees it is
+    sent before the transfer, regardless of whether you also write reply text.
+
     Args:
         conversation_id: The ID of the conversation to transfer (optional, auto-extracted)
         assignee_id: The ID of the human agent to assign to (optional if transfer_rules configured)
@@ -364,6 +412,9 @@ def create_transfer_to_human_tool(
             this situation. Required whenever transfer_rules are configured and you are not
             passing assignee_id/team_id explicitly.
         reason: Optional reason for transfer (for logging)
+        message_to_customer: A short customer-facing message sent BEFORE the transfer
+            (e.g. "Vou te encaminhar para o Departamento X, só um instante."). Required
+            whenever the matched rule's instructions ask you to notify the customer first.
 
     Returns:
         Dictionary with transfer status and details
