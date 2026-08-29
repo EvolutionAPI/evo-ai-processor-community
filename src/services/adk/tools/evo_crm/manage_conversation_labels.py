@@ -71,29 +71,36 @@ def _normalize_labels(raw: Any) -> List[str]:
     return []
 
 
-async def _fetch_catalog_labels(client: EvoCrmClient) -> List[str]:
+async def _fetch_catalog_labels(client: EvoCrmClient) -> "tuple[bool, List[str]]":
     """Fetch the account's real Label catalog (Settings > Labels), not the
     free-form conversation tag list. Conversation tagging (acts_as_taggable_on)
     accepts any string with no relation to this catalog, so without this
     check the model could tag conversations with labels that were never
     created in Settings — invisible there, uncolored, and absent from any
     label-based filter (EVO-2248).
+
+    Returns (fetch_succeeded, titles). A legitimately empty catalog
+    (fetch_succeeded=True, titles=[]) must be distinguishable from a failed
+    fetch (fetch_succeeded=False, titles=[]) — otherwise both look identical
+    to the caller and a genuinely empty account gets misreported as a fetch
+    failure instead of "no labels exist to apply".
     """
     try:
         response = await client.get(endpoint="/labels", params={"per_page": 200})
     except Exception as api_error:
         logger.error(f"Failed to load label catalog: {api_error}")
-        return []
+        return False, []
 
     data = response.get("data") if isinstance(response, dict) else None
     if not isinstance(data, list):
-        return []
+        logger.error(f"Unexpected label catalog response shape: {response!r}")
+        return False, []
 
     titles = []
     for item in data:
         if isinstance(item, dict) and item.get("title"):
             titles.append(str(item["title"]))
-    return titles
+    return True, titles
 
 
 def _coerce_input_list(value: Any) -> List[str]:
@@ -267,7 +274,22 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
             # without this check the model could invent labels that are
             # invisible in Settings, uncolored, and absent from label filters
             # (EVO-2248).
-            catalog_labels = await _fetch_catalog_labels(client)
+            catalog_fetch_ok, catalog_labels = await _fetch_catalog_labels(client)
+
+            if not catalog_fetch_ok:
+                # Fetch genuinely failed — distinct from a successfully
+                # fetched, legitimately empty catalog. Don't silently reject
+                # everything; surface the failure instead.
+                return {
+                    "status": "error",
+                    "message": (
+                        "Could not load the account's label catalog to validate the "
+                        "requested label(s), so nothing was added. Please retry."
+                    ),
+                    "conversation_id": effective_conversation_id,
+                    "action": "add",
+                }
+
             catalog_by_lower = {title.lower(): title for title in catalog_labels}
 
             valid_requested = []
@@ -279,35 +301,33 @@ def create_manage_conversation_labels_tool() -> FunctionTool:
                 else:
                     rejected.append(label)
 
-            if rejected and not catalog_labels:
-                # Catalog fetch failed — don't silently reject everything;
-                # surface the failure instead of pretending no labels exist.
-                return {
-                    "status": "error",
-                    "message": (
-                        "Could not load the account's label catalog to validate the "
-                        "requested label(s), so nothing was added. Please retry."
-                    ),
-                    "conversation_id": effective_conversation_id,
-                    "action": "add",
-                }
-
             merged = list(current_labels)
             added: List[str] = []
+            already_present: List[str] = []
             for label in valid_requested:
                 if label.lower() not in existing_set:
                     merged.append(label)
                     existing_set[label.lower()] = label
                     added.append(label)
+                else:
+                    already_present.append(label)
 
             if not added:
-                message = "All requested labels were already present; nothing to update."
-                if rejected:
+                if rejected and already_present:
+                    message = (
+                        f"Already present: {', '.join(already_present)}. Rejected "
+                        f"(not in the account's label catalog): {', '.join(rejected)}. "
+                        f"Only pre-existing labels can be applied — create them in "
+                        f"Settings > Labels first."
+                    )
+                elif rejected:
                     message = (
                         f"None of the requested label(s) exist in the account's label "
                         f"catalog: {', '.join(rejected)}. Only pre-existing labels can "
                         f"be applied — create them in Settings > Labels first."
                     )
+                else:
+                    message = "All requested labels were already present; nothing to update."
                 return {
                     "status": "success" if not rejected else "error",
                     "message": message,
