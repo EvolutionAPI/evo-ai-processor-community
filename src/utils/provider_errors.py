@@ -26,7 +26,7 @@ _MAX_CAUSE_DEPTH = 6
 class ProviderFailure:
     """A provider-side condition worth reporting verbatim to the operator."""
 
-    kind: str  # rate_limit | unavailable | auth | context_length
+    kind: str  # rate_limit | unavailable | model_not_found | auth | context_length
     http_status: int
     # -3201x, not the bottom of the reserved -32000..-32099 range: a2a_types.py
     # already owns -32001..-32005 and a2a_routes.py emits them, so a quota error
@@ -150,6 +150,28 @@ _CONTEXT_MARKERS = (
     "request payload size exceeds",
 )
 
+# A configured model that no longer exists or was retired by the provider. Gemini
+# answers 404 "models/… is not found for API version …, or is not supported for
+# generateContent"; OpenAI/Anthropic answer 404 "the model … does not exist". Without
+# this the 404 fell through to a generic 500 and the same agent failed on EVERY turn
+# with no hint that its model was simply gone — the recurring silent failure of
+# CRM-424. The model catalogue no longer OFFERS retired models (models_fetcher), but an
+# agent configured before the retirement still points at one.
+_MODEL_MARKERS = (
+    "is not found for api version",
+    "not found for api version",
+    "is not supported for generatecontent",
+    "notfounderror",
+    "model not found",
+    "model_not_found",
+    "does not exist",
+    "is deprecated",
+    "has been deprecated",
+    "no longer available",
+    "invalid model",
+    "unknown model",
+)
+
 
 def _matches(haystack: str, markers) -> bool:
     return any(marker in haystack for marker in markers)
@@ -230,6 +252,8 @@ _SELF_ANCHORING_MARKERS = (
     "authenticationerror",
     "apiconnectionerror",
     "apitimeouterror",
+    "is not found for api version",
+    "is not supported for generatecontent",
 )
 
 
@@ -286,6 +310,19 @@ def classify_provider_error(exc: BaseException) -> Optional[ProviderFailure]:
                 503,
                 -32011,
                 "The model provider is unavailable or overloaded.",
+                link,
+            )
+
+        # A 404 from an LLM provider is a missing/retired model, not "task not
+        # found" — and text markers catch the ones some SDKs raise as 400. Kept
+        # BEFORE auth so a model-not-found never reads as a credential problem.
+        if status == 404 or _matches(haystack, _MODEL_MARKERS):
+            return _build(
+                "model_not_found",
+                404,
+                -32014,
+                "The configured model is unavailable — it may have been renamed or "
+                "deprecated by the provider. Pick a current model in the agent settings.",
                 link,
             )
 

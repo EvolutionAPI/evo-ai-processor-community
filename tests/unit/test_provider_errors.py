@@ -101,6 +101,44 @@ def test_context_window_overflow_is_recognised():
     assert failure is not None and failure.kind == "context_length"
 
 
+# --- CRM-424: a retired/obsolete model is actionable, not a recurring 500 ------
+
+def test_gemini_retired_model_is_reported_as_model_not_found():
+    # Verbatim shape of what the Gemini API returns for a model that was removed.
+    err = (
+        "litellm.NotFoundError: geminiException - models/gemini-2.5-flash-preview-05-20 "
+        "is not found for API version v1beta, or is not supported for generateContent."
+    )
+    wrapped = InternalServerError(err)
+    wrapped.__cause__ = Exception(err)
+
+    failure = classify_provider_error(wrapped)
+
+    assert failure is not None, "a dead model must not read as a bug in our code"
+    assert failure.kind == "model_not_found"
+    assert failure.http_status == 404
+    assert failure.jsonrpc_code == -32014
+    assert "deprecated" in failure.message.lower() or "renamed" in failure.message.lower()
+
+
+def test_openai_missing_model_is_model_not_found():
+    failure = classify_provider_error(
+        Exception("litellm.NotFoundError: The model `gpt-foo` does not exist")
+    )
+    assert failure is not None and failure.kind == "model_not_found"
+
+
+def test_a_provider_404_is_model_not_found_not_auth():
+    """A 404 status carried by a provider SDK is a missing model, never a
+    credential problem (which is 401/403)."""
+
+    class GeminiError(Exception):
+        status_code = 404
+
+    failure = classify_provider_error(GeminiError("gemini-2.0-pro-exp not found"))
+    assert failure is not None and failure.kind == "model_not_found"
+
+
 # --- the part that must NOT fire ----------------------------------------------
 
 def test_a_genuine_bug_in_our_code_stays_a_500():
