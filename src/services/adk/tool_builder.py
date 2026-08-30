@@ -35,7 +35,10 @@ import urllib.parse
 from src.utils.logger import setup_logger
 from src.services.adk.custom_tools import (
     CustomToolBuilder,
+    _json_type_name,
+    _param_config,
     apply_http_tool_signature,
+    http_tool_doc_names,
     strip_modes_meta,
 )
 from src.services.adk.tools import exit_loop
@@ -239,46 +242,6 @@ class ToolBuilder:
                     )
                 )
 
-        # Adds dynamic docstring based on the configuration
-        param_docs = []
-
-        # Adds path parameters
-        for param, value in path_params.items():
-            param_docs.append(f"{param}: {value}")
-
-        # Adds query parameters
-        for param, value in query_params.items():
-            if isinstance(value, list):
-                param_docs.append(f"{param}: List[{', '.join(value)}]")
-            else:
-                param_docs.append(f"{param}: {value}")
-
-        # Adds body parameters
-        for param, param_config in body_params.items():
-            required = "Required" if param_config.get("required", False) else "Optional"
-            param_docs.append(
-                f"{param} ({param_config['type']}, {required}): {param_config['description']}"
-            )
-
-        # Adds default values
-        if values:
-            param_docs.append("\nDefault values:")
-            for param, value in values.items():
-                param_docs.append(f"{param}: {value}")
-
-        http_tool.__doc__ = f"""
-        {description}
-
-        Parameters:
-        {chr(10).join(param_docs)}
-
-        Returns:
-        String containing the response in JSON format
-        """
-
-        # Defines the function name to be used by the ADK
-        http_tool.__name__ = name
-
         # Without a real signature ADK advertises no parameters at all and
         # discards whatever the model sends, leaving only the static `values`.
         param_aliases.update(
@@ -292,6 +255,58 @@ class ToolBuilder:
                 array_param=parameters.get("array_param"),
             )
         )
+
+        # Adds dynamic docstring based on the configuration. Built after the
+        # signature, because a parameter declared under a stand-in identifier
+        # has to be documented under the name the model is actually offered.
+        doc_names = http_tool_doc_names(param_aliases)
+        param_docs = []
+
+        # Adds path parameters
+        for param, value in path_params.items():
+            param_docs.append(f"{doc_names.get(param, param)}: {value}")
+
+        # Adds query parameters
+        for param, value in query_params.items():
+            if isinstance(value, list):
+                # The configured list is sent verbatim, and it is unvalidated
+                # JSON: joining it raw breaks the build on the first number.
+                joined = ", ".join(str(item) for item in value)
+                param_docs.append(f"{doc_names.get(param, param)}: List[{joined}]")
+            else:
+                param_docs.append(f"{doc_names.get(param, param)}: {value}")
+
+        # Adds body parameters. Read through the same coercers the signature
+        # uses: a config missing `description`, or that is not a dict at all,
+        # must not be the reason an agent fails to build.
+        for param, param_config in body_params.items():
+            param_config = _param_config(param_config)
+            required = "Required" if param_config.get("required", False) else "Optional"
+            json_type = _json_type_name(param_config.get("type"))
+            param_description = param_config.get("description")
+            described = f": {param_description}" if param_description else ""
+            param_docs.append(
+                f"{doc_names.get(param, param)} ({json_type}, {required}){described}"
+            )
+
+        # Adds default values
+        if values:
+            param_docs.append("\nDefault values:")
+            for param, value in values.items():
+                param_docs.append(f"{doc_names.get(param, param)}: {value}")
+
+        http_tool.__doc__ = f"""
+        {description}
+
+        Parameters:
+        {chr(10).join(param_docs)}
+
+        Returns:
+        String containing the response in JSON format
+        """
+
+        # Defines the function name to be used by the ADK
+        http_tool.__name__ = name
 
         return FunctionTool(func=http_tool)
 

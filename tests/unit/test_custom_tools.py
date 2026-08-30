@@ -744,6 +744,68 @@ class TestConfiguredParametersReachTheModel:
         assert declaration.parameters.properties["title"].description is None
         assert "Headline of the note" in declaration.description
 
+    def test_an_aliased_parameter_is_documented_under_the_name_the_model_gets(
+        self, builder
+    ):
+        """The docstring is the only channel for a parameter's meaning, and it
+        used to name the configured `user-id` while the schema published
+        `user_id` — two names for one parameter, so the model picks the one ADK
+        then filters away. The configured name stays visible for whoever wrote
+        the configuration."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "user-id": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Author",
+                        }
+                    }
+                }
+            )
+        )
+
+        declaration = built._get_declaration()
+        (documented,) = [
+            line.strip()
+            for line in declaration.description.splitlines()
+            if "Author" in line
+        ]
+
+        assert sorted(declaration.parameters.properties) == ["user_id"]
+        assert documented.startswith("user_id "), documented
+        assert "user-id" in documented, documented
+
+    def test_an_ordinary_parameter_name_is_documented_exactly_as_configured(
+        self, builder
+    ):
+        """Naming the alias must not decorate the common case: a name Python
+        accepts as-is has no stand-in to disambiguate from."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Headline of the note",
+                        }
+                    }
+                }
+            )
+        )
+
+        (documented,) = [
+            line.strip()
+            for line in built._get_declaration().description.splitlines()
+            if "Headline" in line
+        ]
+
+        assert documented == "title (string, Required): Headline of the note"
+
 
 class TestArrayBodyToolsAdvertiseTheirArrayParameter:
     """`body_type: array` sends the array parameter as the whole request body.
@@ -861,3 +923,38 @@ class TestMalformedParameterConfigStillBuildsATool:
 
         assert built.func.__name__ == "create_note"
         assert built._get_declaration().parameters is None
+
+    @pytest.mark.parametrize(
+        "param_config, expected",
+        [
+            ({"type": "string", "required": True}, "title (string, Required)"),
+            ({"required": True}, "title (string, Required)"),
+            ("a bare string", "title (string, Optional)"),
+            (None, "title (string, Optional)"),
+        ],
+        ids=["no-description", "no-type-either", "not-a-dict", "null"],
+    )
+    def test_an_incomplete_body_param_config_is_still_documented(
+        self, builder, param_config, expected
+    ):
+        """The docstring loop indexed `type` and `description` directly, so a
+        row the wizard never filled in raised while the tool was being built —
+        and an inline http_tool raising there takes the agent down with it."""
+
+        built = builder()._create_http_tool(
+            _http_config(parameters={"body_params": {"title": param_config}})
+        )
+
+        assert _advertised(built)["title"].type is Type.STRING
+        assert expected in built._get_declaration().description
+
+    def test_a_list_valued_query_param_of_numbers_is_still_documented(self, builder):
+        """A list-valued query param is joined and sent verbatim, so it never
+        reaches the schema — but the docstring still renders it, and joining
+        unvalidated JSON raw dies on the first element that is not a string."""
+
+        built = builder()._create_http_tool(
+            _http_config(parameters={"query_params": {"ids": [1, 2]}})
+        )
+
+        assert "ids: List[1, 2]" in built._get_declaration().description

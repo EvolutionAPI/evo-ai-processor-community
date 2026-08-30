@@ -240,6 +240,21 @@ def apply_http_tool_signature(
     return aliases
 
 
+def http_tool_doc_names(aliases: Dict[str, str]) -> Dict[str, str]:
+    """Configured name -> the name the generated docstring should give it.
+
+    ADK strips per-parameter descriptions out of the schema, so the docstring
+    is the only place the model reads what a parameter means. Documenting a
+    parameter under a configured name the schema does not publish invites the
+    model to send that name, and ADK then filters the argument away — so the
+    docstring leads with the alias. The configured name follows in brackets,
+    so whoever wrote the configuration still recognises their own parameter.
+    """
+    return {
+        configured: f"{alias} [{configured}]" for alias, configured in aliases.items()
+    }
+
+
 def exit_loop(tool_context: ToolContext):
     """Call this function ONLY when the process indicates no further iterations are needed, signaling the loop should end."""
     logger.info(f"[Tool Call] exit_loop triggered by {tool_context.agent_name}")
@@ -398,32 +413,56 @@ class CustomToolBuilder:
                     )
                 )
 
-        # Adds dynamic docstring based on the configuration
+        # Without a real signature ADK advertises no parameters at all and
+        # discards whatever the model sends, leaving only the static `values`.
+        param_aliases.update(
+            apply_http_tool_signature(
+                http_tool,
+                path_params=path_params,
+                query_params=query_params,
+                body_params=body_params,
+                values=values,
+            )
+        )
+
+        # Adds dynamic docstring based on the configuration. Built after the
+        # signature, because a parameter declared under a stand-in identifier
+        # has to be documented under the name the model is actually offered.
+        doc_names = http_tool_doc_names(param_aliases)
         param_docs = []
 
         # Adds path parameters
         for param, value in path_params.items():
-            param_docs.append(f"{param}: {value}")
+            param_docs.append(f"{doc_names.get(param, param)}: {value}")
 
         # Adds query parameters
         for param, value in query_params.items():
             if isinstance(value, list):
-                param_docs.append(f"{param}: List[{', '.join(value)}]")
+                # The configured list is sent verbatim, and it is unvalidated
+                # JSON: joining it raw breaks the build on the first number.
+                joined = ", ".join(str(item) for item in value)
+                param_docs.append(f"{doc_names.get(param, param)}: List[{joined}]")
             else:
-                param_docs.append(f"{param}: {value}")
+                param_docs.append(f"{doc_names.get(param, param)}: {value}")
 
-        # Adds body parameters
+        # Adds body parameters. Read through the same coercers the signature
+        # uses: a config missing `description`, or that is not a dict at all,
+        # must not be the reason an agent fails to build.
         for param, param_config in body_params.items():
+            param_config = _param_config(param_config)
             required = "Required" if param_config.get("required", False) else "Optional"
+            json_type = _json_type_name(param_config.get("type"))
+            param_description = param_config.get("description")
+            described = f": {param_description}" if param_description else ""
             param_docs.append(
-                f"{param} ({param_config['type']}, {required}): {param_config['description']}"
+                f"{doc_names.get(param, param)} ({json_type}, {required}){described}"
             )
 
         # Adds default values
         if values:
             param_docs.append("\nDefault values:")
             for param, value in values.items():
-                param_docs.append(f"{param}: {value}")
+                param_docs.append(f"{doc_names.get(param, param)}: {value}")
 
         http_tool.__doc__ = f"""
         {description}
@@ -437,18 +476,6 @@ class CustomToolBuilder:
 
         # Defines the function name to be used by the ADK
         http_tool.__name__ = name
-
-        # Without a real signature ADK advertises no parameters at all and
-        # discards whatever the model sends, leaving only the static `values`.
-        param_aliases.update(
-            apply_http_tool_signature(
-                http_tool,
-                path_params=path_params,
-                query_params=query_params,
-                body_params=body_params,
-                values=values,
-            )
-        )
 
         return FunctionTool(func=http_tool)
 
