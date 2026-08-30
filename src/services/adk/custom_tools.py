@@ -61,15 +61,65 @@ def strip_modes_meta(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 ADK_RESERVED_PARAM_NAMES = frozenset({"tool_context", "input_stream"})
 
 
+def _json_type_name(value: Any, default: str = "string") -> str:
+    """A usable JSON type name out of an unvalidated configuration value.
+
+    Parameter configs are free-form persisted JSON, so a type can arrive as a
+    list, a number or anything else. Falling back to the default keeps one bad
+    row from taking the whole agent build down with it.
+    """
+    if isinstance(value, str) and value.strip():
+        return value
+    if value is not None:
+        logger.warning(
+            f"Unusable parameter type {value!r} in tool configuration: "
+            f"assuming '{default}'"
+        )
+    return default
+
+
+def _param_config(value: Any) -> Dict[str, Any]:
+    """A parameter's configuration, whatever the persisted JSON actually holds."""
+    return value if isinstance(value, dict) else {}
+
+
+def _http_tool_element_annotation(element_type: Optional[str] = None) -> Any:
+    """Annotation ADK should advertise for the elements of an array parameter."""
+    element_type = _json_type_name(element_type)
+    if element_type.lower() == "array":
+        # `element_type` is a flat type name, so a nested array can only be
+        # read as an array of strings — and it has to declare elements of its
+        # own, because Gemini demands `items` at every level of an ARRAY.
+        return List[str]
+    return map_json_type_to_python(element_type)
+
+
 def _http_tool_annotation(
-    json_type: Optional[str], element_type: Optional[str] = None
+    json_type: Optional[str] = None, element_type: Optional[str] = None
 ) -> Any:
     """Annotation ADK should advertise for a configured parameter type."""
-    if (json_type or "string").lower() == "array":
+    json_type = _json_type_name(json_type)
+    if json_type.lower() == "array":
         # Gemini rejects an ARRAY parameter that carries no `items`, so an
         # array always declares an element type — string when none is given.
-        return List[map_json_type_to_python(element_type or "string")]
-    return map_json_type_to_python(json_type or "string")
+        return List[_http_tool_element_annotation(element_type)]
+    return map_json_type_to_python(json_type)
+
+
+def _sanitized_param_name(name: str) -> str:
+    """The Python identifier standing in for a configured parameter name.
+
+    A name that is already usable comes back byte for byte — the normal case.
+    Anything else is rewritten deterministically, so a parameter the endpoint
+    genuinely needs can still be declared instead of quietly disappearing.
+    """
+    candidate = "".join(char if f"a{char}".isidentifier() else "_" for char in name)
+    if not candidate.isidentifier():
+        # Empty, or beginning with a digit.
+        candidate = f"p_{candidate}"
+    if keyword.iskeyword(candidate) or candidate in ADK_RESERVED_PARAM_NAMES:
+        candidate = f"{candidate}_"
+    return candidate
 
 
 def apply_http_tool_signature(
@@ -81,7 +131,7 @@ def apply_http_tool_signature(
     values: Optional[Dict[str, Any]] = None,
     body_type: str = "object",
     array_param: Optional[str] = None,
-) -> None:
+) -> Dict[str, str]:
     """Advertise a custom HTTP tool's configured parameters to the LLM.
 
     ADK derives a tool's input schema by walking ``inspect.signature`` and it
@@ -94,6 +144,11 @@ def apply_http_tool_signature(
     A parameter is only mandatory when the configuration has no usable value
     for it, so tools that today send nothing but their static ``values`` keep
     working untouched.
+
+    Returns the alias -> configured name mapping for the parameters whose
+    configured name is not a usable Python identifier. The closure translates
+    the model's arguments through it before building the request, so the
+    endpoint still sees the name it was configured with.
     """
     path_params = path_params or {}
     query_params = query_params or {}
@@ -102,27 +157,45 @@ def apply_http_tool_signature(
 
     declared: List[inspect.Parameter] = []
     seen = set()
+    aliases: Dict[str, str] = {}
+    # Every configured name that is already usable is claimed up front:
+    # sanitising an awkward name must never steal the name another parameter
+    # carries verbatim.
+    taken = {
+        name
+        for group in (path_params, query_params, body_params)
+        for name in group
+        if isinstance(name, str) and _sanitized_param_name(name) == name
+    }
 
-    def declare(param: str, annotation: Any, required: bool) -> None:
+    def declare(param: Any, annotation: Any, required: bool) -> None:
+        if not isinstance(param, str):
+            logger.warning(
+                f"Skipping tool parameter {param!r}: a parameter name must be a "
+                "string"
+            )
+            return
         if param in seen:
             return
-        if param in ADK_RESERVED_PARAM_NAMES:
-            logger.warning(
-                f"Skipping tool parameter '{param}': the name is reserved by ADK"
-            )
-            return
-        if not param.isidentifier() or keyword.iskeyword(param):
-            # Parameter names come from user-authored config. Declaring one
-            # would raise, so drop it rather than break the whole tool.
-            logger.warning(
-                f"Skipping tool parameter '{param}': not a valid Python identifier, "
-                "so it cannot be offered to the model"
-            )
-            return
         seen.add(param)
+
+        # Names come from user-authored config, so they can be anything a JSON
+        # key can be. An unusable one is declared under a stand-in identifier
+        # rather than dropped: a required parameter that never reaches the
+        # schema is a request that fires without it.
+        alias = _sanitized_param_name(param)
+        if alias != param:
+            base = alias
+            suffix = 2
+            while alias in taken:
+                alias = f"{base}_{suffix}"
+                suffix += 1
+            taken.add(alias)
+            aliases[alias] = param
+
         declared.append(
             inspect.Parameter(
-                param,
+                alias,
                 inspect.Parameter.KEYWORD_ONLY,
                 annotation=annotation,
                 default=inspect.Parameter.empty if required else None,
@@ -142,15 +215,18 @@ def apply_http_tool_signature(
         declare(param, str, required=False)
 
     if body_type == "array" and array_param:
-        element = body_params.get(array_param) or {}
+        element = _param_config(body_params.get(array_param))
         declare(
             array_param,
             _http_tool_annotation("array", element.get("element_type")),
-            required=False,
+            # The array *is* the body here, so a required one that the config
+            # cannot fill has to be asked of the model — otherwise the request
+            # goes out as `[]`.
+            required=bool(element.get("required")) and array_param not in values,
         )
     else:
         for param, param_config in body_params.items():
-            param_config = param_config or {}
+            param_config = _param_config(param_config)
             declare(
                 param,
                 _http_tool_annotation(
@@ -161,6 +237,7 @@ def apply_http_tool_signature(
 
     http_tool.__signature__ = inspect.Signature(declared)
     http_tool.__annotations__ = {p.name: p.annotation for p in declared}
+    return aliases
 
 
 def exit_loop(tool_context: ToolContext):
@@ -223,8 +300,19 @@ class CustomToolBuilder:
         query_params = parameters.get("query_params") or {}
         body_params = parameters.get("body_params") or {}
 
+        # Filled in below by `apply_http_tool_signature` for the parameters it
+        # had to declare under a stand-in identifier.
+        param_aliases: Dict[str, str] = {}
+
         def http_tool(**kwargs):
             try:
+                # Back to the configured names, before anything reads them.
+                if param_aliases:
+                    kwargs = {
+                        param_aliases.get(param, param): value
+                        for param, value in kwargs.items()
+                    }
+
                 # Combines default values with provided values
                 all_values = {**values, **kwargs}
 
@@ -257,10 +345,13 @@ class CustomToolBuilder:
                         # Otherwise, use the default value from the configuration
                         query_params_dict[param] = value
 
-                # Adds default values to query params if they are not present
+                # Adds default values to query params if they are not present.
+                # Reads the merge, not the raw defaults: a value the model
+                # overrode must not travel as the canned one here and as the
+                # override in the body.
                 for param, value in values.items():
                     if param not in query_params_dict and param not in path_params:
-                        query_params_dict[param] = value
+                        query_params_dict[param] = all_values.get(param, value)
 
                 body_data = {}
                 for param, param_config in body_params.items():
@@ -274,7 +365,7 @@ class CustomToolBuilder:
                         and param not in query_params_dict
                         and param not in path_params
                     ):
-                        body_data[param] = value
+                        body_data[param] = all_values.get(param, value)
 
                 # Makes the HTTP request
                 response = requests.request(
@@ -349,12 +440,14 @@ class CustomToolBuilder:
 
         # Without a real signature ADK advertises no parameters at all and
         # discards whatever the model sends, leaving only the static `values`.
-        apply_http_tool_signature(
-            http_tool,
-            path_params=path_params,
-            query_params=query_params,
-            body_params=body_params,
-            values=values,
+        param_aliases.update(
+            apply_http_tool_signature(
+                http_tool,
+                path_params=path_params,
+                query_params=query_params,
+                body_params=body_params,
+                values=values,
+            )
         )
 
         return FunctionTool(func=http_tool)

@@ -103,8 +103,19 @@ class ToolBuilder:
         query_params = parameters.get("query_params") or {}
         body_params = parameters.get("body_params") or {}
 
+        # Filled in below by `apply_http_tool_signature` for the parameters it
+        # had to declare under a stand-in identifier.
+        param_aliases: Dict[str, str] = {}
+
         def http_tool(**kwargs):
             try:
+                # Back to the configured names, before anything reads them.
+                if param_aliases:
+                    kwargs = {
+                        param_aliases.get(param, param): value
+                        for param, value in kwargs.items()
+                    }
+
                 # Combines default values with provided values
                 all_values = {**values, **kwargs}
 
@@ -137,10 +148,13 @@ class ToolBuilder:
                         # Otherwise, use the default value from the configuration
                         query_params_dict[param] = value
 
-                # Adds default values to query params if they are not present
+                # Adds default values to query params if they are not present.
+                # Reads the merge, not the raw defaults: a value the model
+                # overrode must not travel as the canned one here and as the
+                # override in the body.
                 for param, value in values.items():
                     if param not in query_params_dict and param not in path_params:
-                        query_params_dict[param] = value
+                        query_params_dict[param] = all_values.get(param, value)
 
                 # Check body type from parameters
                 body_type = parameters.get("body_type", "object")
@@ -192,7 +206,7 @@ class ToolBuilder:
                             and param not in query_params_dict
                             and param not in path_params
                         ):
-                            body_data[param] = value
+                            body_data[param] = all_values.get(param, value)
 
                     # Makes the HTTP request with object body
                     response = requests.request(
@@ -267,14 +281,16 @@ class ToolBuilder:
 
         # Without a real signature ADK advertises no parameters at all and
         # discards whatever the model sends, leaving only the static `values`.
-        apply_http_tool_signature(
-            http_tool,
-            path_params=path_params,
-            query_params=query_params,
-            body_params=body_params,
-            values=values,
-            body_type=parameters.get("body_type", "object"),
-            array_param=parameters.get("array_param"),
+        param_aliases.update(
+            apply_http_tool_signature(
+                http_tool,
+                path_params=path_params,
+                query_params=query_params,
+                body_params=body_params,
+                values=values,
+                body_type=parameters.get("body_type", "object"),
+                array_param=parameters.get("array_param"),
+            )
         )
 
         return FunctionTool(func=http_tool)
