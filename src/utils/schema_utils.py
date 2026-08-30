@@ -79,7 +79,7 @@ def json_schema_to_pydantic(
             field_default = field_config.get("default")
 
             # Map JSON schema types to Python types
-            python_type = _map_json_type_to_python(field_type)
+            python_type = map_json_type_to_python(field_type)
 
             if field_required and field_default is None:
                 # Required field without default
@@ -130,7 +130,7 @@ def json_schema_to_pydantic(
         return None
 
 
-def _map_json_type_to_python(json_type: str) -> Type:
+def map_json_type_to_python(json_type: str) -> Type:
     """Map JSON schema types to Python types."""
     type_mapping = {
         "string": str,

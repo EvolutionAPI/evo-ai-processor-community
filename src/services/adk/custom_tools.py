@@ -27,13 +27,16 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
+import inspect
+import keyword
 import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
+from src.utils.schema_utils import map_json_type_to_python
 
 logger = setup_logger(__name__)
 
@@ -51,6 +54,113 @@ def strip_modes_meta(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         for key, value in (values or {}).items()
         if key not in MODES_META_KEYS
     }
+
+
+# ADK fills parameters carrying these names itself, so a tool must never
+# declare one of its own.
+ADK_RESERVED_PARAM_NAMES = frozenset({"tool_context", "input_stream"})
+
+
+def _http_tool_annotation(
+    json_type: Optional[str], element_type: Optional[str] = None
+) -> Any:
+    """Annotation ADK should advertise for a configured parameter type."""
+    if (json_type or "string").lower() == "array":
+        # Gemini rejects an ARRAY parameter that carries no `items`, so an
+        # array always declares an element type — string when none is given.
+        return List[map_json_type_to_python(element_type or "string")]
+    return map_json_type_to_python(json_type or "string")
+
+
+def apply_http_tool_signature(
+    http_tool: Callable[..., Any],
+    *,
+    path_params: Optional[Dict[str, Any]] = None,
+    query_params: Optional[Dict[str, Any]] = None,
+    body_params: Optional[Dict[str, Any]] = None,
+    values: Optional[Dict[str, Any]] = None,
+    body_type: str = "object",
+    array_param: Optional[str] = None,
+) -> None:
+    """Advertise a custom HTTP tool's configured parameters to the LLM.
+
+    ADK derives a tool's input schema by walking ``inspect.signature`` and it
+    skips ``VAR_KEYWORD`` outright, so a bare ``**kwargs`` closure is published
+    with no properties at all — and ``FunctionTool.run_async`` then filters
+    model-supplied arguments against that same signature and drops every one of
+    them. Giving the closure a real keyword-only signature fixes both halves at
+    once; the request-building body keeps reading its values out of ``kwargs``.
+
+    A parameter is only mandatory when the configuration has no usable value
+    for it, so tools that today send nothing but their static ``values`` keep
+    working untouched.
+    """
+    path_params = path_params or {}
+    query_params = query_params or {}
+    body_params = body_params or {}
+    values = values or {}
+
+    declared: List[inspect.Parameter] = []
+    seen = set()
+
+    def declare(param: str, annotation: Any, required: bool) -> None:
+        if param in seen:
+            return
+        if param in ADK_RESERVED_PARAM_NAMES:
+            logger.warning(
+                f"Skipping tool parameter '{param}': the name is reserved by ADK"
+            )
+            return
+        if not param.isidentifier() or keyword.iskeyword(param):
+            # Parameter names come from user-authored config. Declaring one
+            # would raise, so drop it rather than break the whole tool.
+            logger.warning(
+                f"Skipping tool parameter '{param}': not a valid Python identifier, "
+                "so it cannot be offered to the model"
+            )
+            return
+        seen.add(param)
+        declared.append(
+            inspect.Parameter(
+                param,
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=annotation,
+                default=inspect.Parameter.empty if required else None,
+            )
+        )
+
+    # A path placeholder leaves a broken URL behind when nothing fills it.
+    for param in path_params:
+        declare(param, str, required=param not in values)
+
+    for param, configured in query_params.items():
+        # A list-valued query param is joined and sent verbatim; the model has
+        # no say over it, so it is not advertised.
+        if isinstance(configured, list):
+            continue
+        # The configured scalar stays the fallback when the model says nothing.
+        declare(param, str, required=False)
+
+    if body_type == "array" and array_param:
+        element = body_params.get(array_param) or {}
+        declare(
+            array_param,
+            _http_tool_annotation("array", element.get("element_type")),
+            required=False,
+        )
+    else:
+        for param, param_config in body_params.items():
+            param_config = param_config or {}
+            declare(
+                param,
+                _http_tool_annotation(
+                    param_config.get("type"), param_config.get("element_type")
+                ),
+                required=bool(param_config.get("required")) and param not in values,
+            )
+
+    http_tool.__signature__ = inspect.Signature(declared)
+    http_tool.__annotations__ = {p.name: p.annotation for p in declared}
 
 
 def exit_loop(tool_context: ToolContext):
@@ -236,6 +346,16 @@ class CustomToolBuilder:
 
         # Defines the function name to be used by the ADK
         http_tool.__name__ = name
+
+        # Without a real signature ADK advertises no parameters at all and
+        # discards whatever the model sends, leaving only the static `values`.
+        apply_http_tool_signature(
+            http_tool,
+            path_params=path_params,
+            query_params=query_params,
+            body_params=body_params,
+            values=values,
+        )
 
         return FunctionTool(func=http_tool)
 

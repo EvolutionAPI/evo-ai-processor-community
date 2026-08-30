@@ -33,7 +33,11 @@ import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
-from src.services.adk.custom_tools import CustomToolBuilder, strip_modes_meta
+from src.services.adk.custom_tools import (
+    CustomToolBuilder,
+    apply_http_tool_signature,
+    strip_modes_meta,
+)
 from src.services.adk.tools import exit_loop
 from src.services.adk.tools import create_text_to_speech_tool
 
@@ -260,6 +264,18 @@ class ToolBuilder:
 
         # Defines the function name to be used by the ADK
         http_tool.__name__ = name
+
+        # Without a real signature ADK advertises no parameters at all and
+        # discards whatever the model sends, leaving only the static `values`.
+        apply_http_tool_signature(
+            http_tool,
+            path_params=path_params,
+            query_params=query_params,
+            body_params=body_params,
+            values=values,
+            body_type=parameters.get("body_type", "object"),
+            array_param=parameters.get("array_param"),
+        )
 
         return FunctionTool(func=http_tool)
 
