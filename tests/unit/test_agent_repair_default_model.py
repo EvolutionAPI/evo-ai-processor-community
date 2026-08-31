@@ -71,3 +71,4 @@ def test_repair_keeps_a_model_the_agent_already_has():
     # matching would leave the model untouched and the test would still pass.
     assert result.type == "llm", "repair did not run"
     assert result.model == "perplexity/sonar-pro"
+    assert db.commit.called, "the repair still writes — the model just has to survive the write"
