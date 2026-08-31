@@ -352,7 +352,8 @@ class CustomToolBuilder:
                 for param, value in query_params.items():
                     if isinstance(value, list):
                         # If the value is a list, join with comma
-                        query_params_dict[param] = ",".join(value)
+                        # Unvalidated JSON: a raw join dies on the first number.
+                        query_params_dict[param] = ",".join(str(item) for item in value)
                     elif param in all_values:
                         # If the parameter is in the values, use the provided value
                         query_params_dict[param] = all_values[param]

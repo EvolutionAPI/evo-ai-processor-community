@@ -958,3 +958,35 @@ class TestMalformedParameterConfigStillBuildsATool:
         )
 
         assert "ids: List[1, 2]" in built._get_declaration().description
+
+    @pytest.mark.parametrize(
+        "configured, expected",
+        [
+            (["a", 1], "a,1"),
+            (["a", True], "a,True"),
+            (["a", None], "a,None"),
+        ],
+        ids=["int", "bool", "null"],
+    )
+    def test_a_list_valued_query_param_of_numbers_still_reaches_the_endpoint(
+        self, builder, configured, expected
+    ):
+        """The docstring loop was taught to coerce, the request path was not:
+        the raw join raised inside the tool closure, the broad except swallowed
+        it, and the tool answered with its fallback instead of requesting."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                name="search_notes",
+                description="Searches notes",
+                method="GET",
+                endpoint="https://example.test/search",
+                parameters={"query_params": {"tags": configured}},
+            )
+        )
+
+        result, sent = _invoke(builder, built, {})
+
+        assert sent is not None, "the tool answered its fallback instead of requesting"
+        assert sent["params"] == {"tags": expected}
+        assert result == '{"ok": true}'
