@@ -38,6 +38,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Model stamped on a malformed sequential/parallel/loop agent that is coerced to
+# llm with no model of its own. It is committed, so a retired id here does not
+# merely fail once — it lands in the customer's agent. The provider prefix is
+# required: LiteLLM only guesses a bare name when it matches a family it already
+# knows, and raises BadRequestError on anything else. Mirrors defaultRepairModel
+# in evo-ai-core-service-community/pkg/agent/service/agent_service.go.
+DEFAULT_REPAIR_MODEL = "openai/gpt-5.6-luna"
+
 
 class AgentValidationError(Exception):
     """Raised when agent API key validation cannot be completed due to an
@@ -424,7 +432,7 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
 
                 # Set a default model if not present
                 if not agent.model:
-                    agent.model = "gpt-4.1-nano"
+                    agent.model = DEFAULT_REPAIR_MODEL
 
                 # Convert config to basic LLM config structure
                 if not isinstance(agent.config, dict):
@@ -530,7 +538,7 @@ def get_agents_by_account(
 
                     # Set a default model if not present
                     if not agent.model:
-                        agent.model = "gpt-4.1-nano"
+                        agent.model = DEFAULT_REPAIR_MODEL
 
                     # Convert config to basic LLM config structure
                     if not isinstance(agent.config, dict):
