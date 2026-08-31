@@ -38,6 +38,10 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Committed onto a malformed agent coerced to llm, so a retired id here lands in
+# the customer's data. Prefixed for LiteLLM; mirrors defaultRepairModel in core-service.
+DEFAULT_REPAIR_MODEL = "openai/gpt-5.6-luna"
+
 
 class AgentValidationError(Exception):
     """Raised when agent API key validation cannot be completed due to an
@@ -424,7 +428,7 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
 
                 # Set a default model if not present
                 if not agent.model:
-                    agent.model = "gpt-4.1-nano"
+                    agent.model = DEFAULT_REPAIR_MODEL
 
                 # Convert config to basic LLM config structure
                 if not isinstance(agent.config, dict):
@@ -530,7 +534,7 @@ def get_agents_by_account(
 
                     # Set a default model if not present
                     if not agent.model:
-                        agent.model = "gpt-4.1-nano"
+                        agent.model = DEFAULT_REPAIR_MODEL
 
                     # Convert config to basic LLM config structure
                     if not isinstance(agent.config, dict):
