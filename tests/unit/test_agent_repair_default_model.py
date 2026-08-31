@@ -1,10 +1,5 @@
-"""The model the repair stamps on a malformed agent (CRM-464).
-
-get_agent and get_agents_by_account both coerce a sequential/parallel/loop agent
-with no sub_agents into an llm agent, and commit. When the agent has no model of
-its own they pick one — so a retired id here is written into the customer's
-agent, not merely tried once.
-"""
+"""Both repair entry points stamp a model and commit, so a retired default here is
+written into the customer's agent rather than merely tried once."""
 
 from __future__ import annotations
 
@@ -61,6 +56,7 @@ def test_get_agents_by_account_repair_stamps_the_same_model():
 
     assert agents[0].type == "llm", "repair did not run"
     assert agents[0].model == EXPECTED_MODEL
+    assert db.commit.called, "the list path commits too — that is what puts the id in the DB"
 
 
 def test_repair_keeps_a_model_the_agent_already_has():
@@ -71,4 +67,7 @@ def test_repair_keeps_a_model_the_agent_already_has():
 
     result = asyncio.run(get_agent(db, agent.id))
 
+    # Without this the assertion below is vacuous: a repair path that stopped
+    # matching would leave the model untouched and the test would still pass.
+    assert result.type == "llm", "repair did not run"
     assert result.model == "perplexity/sonar-pro"

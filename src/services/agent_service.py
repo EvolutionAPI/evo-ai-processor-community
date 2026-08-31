@@ -38,12 +38,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Model stamped on a malformed sequential/parallel/loop agent that is coerced to
-# llm with no model of its own. It is committed, so a retired id here does not
-# merely fail once — it lands in the customer's agent. The provider prefix is
-# required: LiteLLM only guesses a bare name when it matches a family it already
-# knows, and raises BadRequestError on anything else. Mirrors defaultRepairModel
-# in evo-ai-core-service-community/pkg/agent/service/agent_service.go.
+# Committed onto a malformed agent coerced to llm, so a retired id here lands in
+# the customer's data. Prefixed for LiteLLM; mirrors defaultRepairModel in core-service.
 DEFAULT_REPAIR_MODEL = "openai/gpt-5.6-luna"
 
 
