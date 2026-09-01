@@ -114,6 +114,38 @@ class TestBuildToolsFromIds:
             CustomToolBuilder().build_tools({"custom_tool_ids": [str(uuid.uuid4())]})
 
 
+class TestHttpToolNameSanitization:
+    """CRM-499: a custom tool name with a space/accent reached the LLM verbatim
+    as tools[].function.name and was rejected (must match ^[a-zA-Z0-9_-]+$),
+    breaking the whole turn. Both builders that emit HTTP tools must sanitize
+    the __name__ they dispatch by. Reverting the sanitize call at either site
+    makes these fail (the raw space survives)."""
+
+    @pytest.mark.parametrize("builder_cls", BUILDERS)
+    def test_a_space_in_the_name_is_sanitized(self, builder_cls):
+        built = builder_cls()._create_http_tool(
+            {
+                "name": "testando ferramenta",
+                "description": "x",
+                "endpoint": "https://example.com",
+                "method": "GET",
+            }
+        )
+        assert built.func.__name__ == "testando_ferramenta"
+
+    @pytest.mark.parametrize("builder_cls", BUILDERS)
+    def test_a_valid_name_is_preserved(self, builder_cls):
+        built = builder_cls()._create_http_tool(
+            {
+                "name": "get_weather",
+                "description": "x",
+                "endpoint": "https://example.com",
+                "method": "GET",
+            }
+        )
+        assert built.func.__name__ == "get_weather"
+
+
 class TestReconstructCustomConfigurations:
     """The agent config carries only the ids; the http_tools are rebuilt on read."""
 
