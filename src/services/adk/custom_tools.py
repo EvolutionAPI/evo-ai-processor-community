@@ -27,13 +27,16 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
+import inspect
+import keyword
 import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
+from src.utils.schema_utils import map_json_type_to_python
 
 logger = setup_logger(__name__)
 
@@ -50,6 +53,205 @@ def strip_modes_meta(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         key: value
         for key, value in (values or {}).items()
         if key not in MODES_META_KEYS
+    }
+
+
+# ADK fills parameters carrying these names itself, so a tool must never
+# declare one of its own.
+ADK_RESERVED_PARAM_NAMES = frozenset({"tool_context", "input_stream"})
+
+
+def _json_type_name(value: Any, default: str = "string") -> str:
+    """A usable JSON type name out of an unvalidated configuration value.
+
+    Parameter configs are free-form persisted JSON, so a type can arrive as a
+    list, a number or anything else. Falling back to the default keeps one bad
+    row from taking the whole agent build down with it.
+    """
+    if isinstance(value, str) and value.strip():
+        return value
+    if value is not None:
+        logger.warning(
+            f"Unusable parameter type {value!r} in tool configuration: "
+            f"assuming '{default}'"
+        )
+    return default
+
+
+def _param_config(value: Any) -> Dict[str, Any]:
+    """A parameter's configuration, whatever the persisted JSON actually holds."""
+    return value if isinstance(value, dict) else {}
+
+
+def _http_tool_element_annotation(element_type: Optional[str] = None) -> Any:
+    """Annotation ADK should advertise for the elements of an array parameter."""
+    element_type = _json_type_name(element_type)
+    if element_type.lower() == "array":
+        # `element_type` is a flat type name, so a nested array can only be
+        # read as an array of strings — and it has to declare elements of its
+        # own, because Gemini demands `items` at every level of an ARRAY.
+        return List[str]
+    return map_json_type_to_python(element_type)
+
+
+def _http_tool_annotation(
+    json_type: Optional[str] = None, element_type: Optional[str] = None
+) -> Any:
+    """Annotation ADK should advertise for a configured parameter type."""
+    json_type = _json_type_name(json_type)
+    if json_type.lower() == "array":
+        # Gemini rejects an ARRAY parameter that carries no `items`, so an
+        # array always declares an element type — string when none is given.
+        return List[_http_tool_element_annotation(element_type)]
+    return map_json_type_to_python(json_type)
+
+
+def _sanitized_param_name(name: str) -> str:
+    """The Python identifier standing in for a configured parameter name.
+
+    A name that is already usable comes back byte for byte — the normal case.
+    Anything else is rewritten deterministically, so a parameter the endpoint
+    genuinely needs can still be declared instead of quietly disappearing.
+    """
+    candidate = "".join(char if f"a{char}".isidentifier() else "_" for char in name)
+    if not candidate.isidentifier():
+        # Empty, or beginning with a digit.
+        candidate = f"p_{candidate}"
+    if keyword.iskeyword(candidate) or candidate in ADK_RESERVED_PARAM_NAMES:
+        candidate = f"{candidate}_"
+    return candidate
+
+
+def apply_http_tool_signature(
+    http_tool: Callable[..., Any],
+    *,
+    path_params: Optional[Dict[str, Any]] = None,
+    query_params: Optional[Dict[str, Any]] = None,
+    body_params: Optional[Dict[str, Any]] = None,
+    values: Optional[Dict[str, Any]] = None,
+    body_type: str = "object",
+    array_param: Optional[str] = None,
+) -> Dict[str, str]:
+    """Advertise a custom HTTP tool's configured parameters to the LLM.
+
+    ADK derives a tool's input schema by walking ``inspect.signature`` and it
+    skips ``VAR_KEYWORD`` outright, so a bare ``**kwargs`` closure is published
+    with no properties at all — and ``FunctionTool.run_async`` then filters
+    model-supplied arguments against that same signature and drops every one of
+    them. Giving the closure a real keyword-only signature fixes both halves at
+    once; the request-building body keeps reading its values out of ``kwargs``.
+
+    A parameter is only mandatory when the configuration has no usable value
+    for it, so tools that today send nothing but their static ``values`` keep
+    working untouched.
+
+    Returns the alias -> configured name mapping for the parameters whose
+    configured name is not a usable Python identifier. The closure translates
+    the model's arguments through it before building the request, so the
+    endpoint still sees the name it was configured with.
+    """
+    path_params = path_params or {}
+    query_params = query_params or {}
+    body_params = body_params or {}
+    values = values or {}
+
+    declared: List[inspect.Parameter] = []
+    seen = set()
+    aliases: Dict[str, str] = {}
+    # Every configured name that is already usable is claimed up front:
+    # sanitising an awkward name must never steal the name another parameter
+    # carries verbatim.
+    taken = {
+        name
+        for group in (path_params, query_params, body_params)
+        for name in group
+        if isinstance(name, str) and _sanitized_param_name(name) == name
+    }
+
+    def declare(param: Any, annotation: Any, required: bool) -> None:
+        if not isinstance(param, str):
+            logger.warning(
+                f"Skipping tool parameter {param!r}: a parameter name must be a "
+                "string"
+            )
+            return
+        if param in seen:
+            return
+        seen.add(param)
+
+        # Names come from user-authored config, so they can be anything a JSON
+        # key can be. An unusable one is declared under a stand-in identifier
+        # rather than dropped: a required parameter that never reaches the
+        # schema is a request that fires without it.
+        alias = _sanitized_param_name(param)
+        if alias != param:
+            base = alias
+            suffix = 2
+            while alias in taken:
+                alias = f"{base}_{suffix}"
+                suffix += 1
+            taken.add(alias)
+            aliases[alias] = param
+
+        declared.append(
+            inspect.Parameter(
+                alias,
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=annotation,
+                default=inspect.Parameter.empty if required else None,
+            )
+        )
+
+    # A path placeholder leaves a broken URL behind when nothing fills it.
+    for param in path_params:
+        declare(param, str, required=param not in values)
+
+    for param, configured in query_params.items():
+        # A list-valued query param is joined and sent verbatim; the model has
+        # no say over it, so it is not advertised.
+        if isinstance(configured, list):
+            continue
+        # The configured scalar stays the fallback when the model says nothing.
+        declare(param, str, required=False)
+
+    if body_type == "array" and array_param:
+        element = _param_config(body_params.get(array_param))
+        declare(
+            array_param,
+            _http_tool_annotation("array", element.get("element_type")),
+            # The array *is* the body here, so a required one that the config
+            # cannot fill has to be asked of the model — otherwise the request
+            # goes out as `[]`.
+            required=bool(element.get("required")) and array_param not in values,
+        )
+    else:
+        for param, param_config in body_params.items():
+            param_config = _param_config(param_config)
+            declare(
+                param,
+                _http_tool_annotation(
+                    param_config.get("type"), param_config.get("element_type")
+                ),
+                required=bool(param_config.get("required")) and param not in values,
+            )
+
+    http_tool.__signature__ = inspect.Signature(declared)
+    http_tool.__annotations__ = {p.name: p.annotation for p in declared}
+    return aliases
+
+
+def http_tool_doc_names(aliases: Dict[str, str]) -> Dict[str, str]:
+    """Configured name -> the name the generated docstring should give it.
+
+    ADK strips per-parameter descriptions out of the schema, so the docstring
+    is the only place the model reads what a parameter means. Documenting a
+    parameter under a configured name the schema does not publish invites the
+    model to send that name, and ADK then filters the argument away — so the
+    docstring leads with the alias. The configured name follows in brackets,
+    so whoever wrote the configuration still recognises their own parameter.
+    """
+    return {
+        configured: f"{alias} [{configured}]" for alias, configured in aliases.items()
     }
 
 
@@ -113,8 +315,19 @@ class CustomToolBuilder:
         query_params = parameters.get("query_params") or {}
         body_params = parameters.get("body_params") or {}
 
+        # Filled in below by `apply_http_tool_signature` for the parameters it
+        # had to declare under a stand-in identifier.
+        param_aliases: Dict[str, str] = {}
+
         def http_tool(**kwargs):
             try:
+                # Back to the configured names, before anything reads them.
+                if param_aliases:
+                    kwargs = {
+                        param_aliases.get(param, param): value
+                        for param, value in kwargs.items()
+                    }
+
                 # Combines default values with provided values
                 all_values = {**values, **kwargs}
 
@@ -139,7 +352,8 @@ class CustomToolBuilder:
                 for param, value in query_params.items():
                     if isinstance(value, list):
                         # If the value is a list, join with comma
-                        query_params_dict[param] = ",".join(value)
+                        # Unvalidated JSON: a raw join dies on the first number.
+                        query_params_dict[param] = ",".join(str(item) for item in value)
                     elif param in all_values:
                         # If the parameter is in the values, use the provided value
                         query_params_dict[param] = all_values[param]
@@ -147,10 +361,13 @@ class CustomToolBuilder:
                         # Otherwise, use the default value from the configuration
                         query_params_dict[param] = value
 
-                # Adds default values to query params if they are not present
+                # Adds default values to query params if they are not present.
+                # Reads the merge, not the raw defaults: a value the model
+                # overrode must not travel as the canned one here and as the
+                # override in the body.
                 for param, value in values.items():
                     if param not in query_params_dict and param not in path_params:
-                        query_params_dict[param] = value
+                        query_params_dict[param] = all_values.get(param, value)
 
                 body_data = {}
                 for param, param_config in body_params.items():
@@ -164,7 +381,7 @@ class CustomToolBuilder:
                         and param not in query_params_dict
                         and param not in path_params
                     ):
-                        body_data[param] = value
+                        body_data[param] = all_values.get(param, value)
 
                 # Makes the HTTP request
                 response = requests.request(
@@ -197,32 +414,56 @@ class CustomToolBuilder:
                     )
                 )
 
-        # Adds dynamic docstring based on the configuration
+        # Without a real signature ADK advertises no parameters at all and
+        # discards whatever the model sends, leaving only the static `values`.
+        param_aliases.update(
+            apply_http_tool_signature(
+                http_tool,
+                path_params=path_params,
+                query_params=query_params,
+                body_params=body_params,
+                values=values,
+            )
+        )
+
+        # Adds dynamic docstring based on the configuration. Built after the
+        # signature, because a parameter declared under a stand-in identifier
+        # has to be documented under the name the model is actually offered.
+        doc_names = http_tool_doc_names(param_aliases)
         param_docs = []
 
         # Adds path parameters
         for param, value in path_params.items():
-            param_docs.append(f"{param}: {value}")
+            param_docs.append(f"{doc_names.get(param, param)}: {value}")
 
         # Adds query parameters
         for param, value in query_params.items():
             if isinstance(value, list):
-                param_docs.append(f"{param}: List[{', '.join(value)}]")
+                # The configured list is sent verbatim, and it is unvalidated
+                # JSON: joining it raw breaks the build on the first number.
+                joined = ", ".join(str(item) for item in value)
+                param_docs.append(f"{doc_names.get(param, param)}: List[{joined}]")
             else:
-                param_docs.append(f"{param}: {value}")
+                param_docs.append(f"{doc_names.get(param, param)}: {value}")
 
-        # Adds body parameters
+        # Adds body parameters. Read through the same coercers the signature
+        # uses: a config missing `description`, or that is not a dict at all,
+        # must not be the reason an agent fails to build.
         for param, param_config in body_params.items():
+            param_config = _param_config(param_config)
             required = "Required" if param_config.get("required", False) else "Optional"
+            json_type = _json_type_name(param_config.get("type"))
+            param_description = param_config.get("description")
+            described = f": {param_description}" if param_description else ""
             param_docs.append(
-                f"{param} ({param_config['type']}, {required}): {param_config['description']}"
+                f"{doc_names.get(param, param)} ({json_type}, {required}){described}"
             )
 
         # Adds default values
         if values:
             param_docs.append("\nDefault values:")
             for param, value in values.items():
-                param_docs.append(f"{param}: {value}")
+                param_docs.append(f"{doc_names.get(param, param)}: {value}")
 
         http_tool.__doc__ = f"""
         {description}

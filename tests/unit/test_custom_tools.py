@@ -10,11 +10,13 @@ uses.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from google.genai.types import Type
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -62,6 +64,47 @@ def _tool(name: str = "advice", **overrides) -> SimpleNamespace:
     for key, value in overrides.items():
         setattr(tool, key, value)
     return tool
+
+
+def _http_config(**overrides) -> dict:
+    """The minimum an http_tool config needs, before the parameters under test."""
+
+    config = {
+        "name": "create_note",
+        "description": "Creates a note",
+        "method": "POST",
+        "endpoint": "https://example.test/notes",
+        "parameters": {},
+        "values": {},
+    }
+    config.update(overrides)
+    return config
+
+
+def _advertised(built) -> dict:
+    """The parameter schema ADK actually publishes to the LLM for a built tool."""
+
+    declaration = built._get_declaration()
+    assert declaration.parameters is not None, (
+        "ADK published no input schema, so the model cannot see any parameter "
+        "of this tool"
+    )
+    return dict(declaration.parameters.properties)
+
+
+def _invoke(builder, built, args: dict):
+    """Call a built tool the way ADK does and hand back the intercepted request.
+
+    Goes through `run_async` rather than `built.func` on purpose: the argument
+    filtering that silently discarded everything the model sent lives in
+    `FunctionTool.run_async`, so a direct call cannot see it.
+    """
+
+    target = f"{builder.__module__}.requests.request"
+    with patch(target) as request:
+        request.return_value = MagicMock(status_code=200, json=lambda: {"ok": True})
+        result = asyncio.run(built.run_async(args=args, tool_context=None))
+    return result, (request.call_args.kwargs if request.called else None)
 
 
 class TestGetCustomTool:
@@ -335,3 +378,615 @@ class TestReservedMetadataKeysNeverReachTheWire:
         )
 
         assert sent["params"] == {"format": "json", "lang": "pt"}
+
+
+@pytest.mark.parametrize("builder", BUILDERS, ids=lambda b: b.__name__)
+class TestConfiguredParametersReachTheModel:
+    """A custom HTTP tool used to be published to the LLM with no parameters.
+
+    ADK derives the input schema from `inspect.signature` and skips
+    VAR_KEYWORD, so the `**kwargs` closure both builders return advertised
+    nothing at all; `FunctionTool.run_async` then filtered every model-supplied
+    argument against that same signature and dropped it. Only the static
+    `values` ever reached the endpoint, which is why every test that calls
+    `built.func(...)` directly stayed green while the tools were useless.
+    """
+
+    def test_body_parameters_are_advertised_with_their_json_types(self, builder):
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Title",
+                        },
+                        "tags": {
+                            "type": "array",
+                            "element_type": "string",
+                            "required": False,
+                            "description": "Tags",
+                        },
+                    }
+                }
+            )
+        )
+
+        advertised = _advertised(built)
+
+        assert sorted(advertised) == ["tags", "title"]
+        assert advertised["title"].type is Type.STRING
+        assert advertised["tags"].type is Type.ARRAY
+        # Gemini rejects an ARRAY parameter whose items are unspecified.
+        assert advertised["tags"].items.type is Type.STRING
+
+    def test_a_body_parameter_the_model_supplies_reaches_the_endpoint(self, builder):
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Title",
+                        }
+                    }
+                }
+            )
+        )
+
+        result, sent = _invoke(builder, built, {"title": "hello"})
+
+        assert sent is not None, "the tool never reached the endpoint"
+        assert sent["json"] == {"title": "hello"}
+        assert result == '{"ok": true}'
+
+    def test_a_missing_mandatory_parameter_is_reported_instead_of_requested(
+        self, builder
+    ):
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Title",
+                        }
+                    }
+                }
+            )
+        )
+
+        result, sent = _invoke(builder, built, {})
+
+        assert sent is None, "an incomplete call must not hit the endpoint"
+        assert "title" in result["error"]
+
+    def test_a_path_placeholder_is_filled_from_a_model_argument(self, builder):
+        built = builder()._create_http_tool(
+            _http_config(
+                name="get_note",
+                description="Gets a note",
+                method="GET",
+                endpoint="https://example.test/notes/{note_id}",
+                parameters={"path_params": {"note_id": "The note id"}},
+            )
+        )
+
+        assert sorted(_advertised(built)) == ["note_id"]
+
+        _, sent = _invoke(builder, built, {"note_id": "42"})
+
+        assert sent["url"] == "https://example.test/notes/42"
+
+    def test_a_required_parameter_with_a_static_value_stays_optional(self, builder):
+        """Tools configured to send nothing but their canned values still fire.
+
+        Making every `required` parameter mandatory would break them: the model
+        is never asked for a value the configuration already provides.
+        """
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Title",
+                        }
+                    }
+                },
+                values={"title": "canned"},
+            )
+        )
+
+        assert sorted(_advertised(built)) == ["title"]
+
+        result, sent = _invoke(builder, built, {})
+
+        assert sent is not None, "a fully static tool must still reach the endpoint"
+        assert sent["json"] == {"title": "canned"}
+        assert result == '{"ok": true}'
+
+    def test_a_list_valued_query_param_is_not_offered_to_the_model(self, builder):
+        """The builders join a list-valued query param and send it verbatim, so
+        offering it would let the model believe in a choice it does not have."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                name="search_notes",
+                description="Searches notes",
+                method="GET",
+                endpoint="https://example.test/search",
+                parameters={"query_params": {"lang": "pt", "fields": ["id", "name"]}},
+            )
+        )
+
+        advertised = _advertised(built)
+
+        assert sorted(advertised) == ["lang"]
+        assert advertised["lang"].type is Type.STRING
+
+        _, sent = _invoke(builder, built, {})
+
+        assert sent["params"] == {"lang": "pt", "fields": "id,name"}
+
+    def test_a_static_default_the_model_overrides_travels_as_the_override(
+        self, builder
+    ):
+        """The leftover-defaults pass injects every static value the request is
+        not already carrying, the query string included. Sourcing it from the
+        raw defaults sent the canned value as a query param while the body
+        carried the model's — one field, one request, two different values."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Title",
+                        }
+                    }
+                },
+                values={"title": "canned"},
+            )
+        )
+
+        _, sent = _invoke(builder, built, {"title": "model"})
+
+        assert sent is not None, "the tool never reached the endpoint"
+        assert sent["json"] == {"title": "model"}
+        assert sent["params"] == {"title": "model"}
+
+    def test_a_required_parameter_python_cannot_name_is_still_asked_for(self, builder):
+        """`user-id` is not a Python identifier, so it cannot be declared under
+        its own name. Leaving it out of the schema made ADK fire the request
+        without a parameter the endpoint requires; it is declared under a
+        stand-in identifier instead and translated back on the way out."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "user-id": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Author",
+                        }
+                    }
+                }
+            )
+        )
+
+        assert sorted(_advertised(built)) == ["user_id"]
+
+        result, sent = _invoke(builder, built, {})
+        assert sent is None, "an incomplete call must not hit the endpoint"
+        assert "user_id" in result["error"]
+
+        _, sent = _invoke(builder, built, {"user_id": "7"})
+        assert sent["json"] == {"user-id": "7"}, "the endpoint expects its own name"
+
+    def test_a_usable_parameter_name_is_never_rewritten(self, builder):
+        """The overwhelmingly common case: a name Python accepts as-is has to
+        reach the model byte for byte."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "path_params": {"note_id": "The note id"},
+                    "query_params": {"lang": "pt"},
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": False,
+                            "description": "Title",
+                        }
+                    },
+                },
+                endpoint="https://example.test/notes/{note_id}",
+            )
+        )
+
+        assert sorted(_advertised(built)) == ["lang", "note_id", "title"]
+
+    def test_two_names_that_sanitize_alike_both_survive(self, builder):
+        """`user-id` and `user.id` both want to become `user_id`. Handing them
+        the same identifier would lose one of the two."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "user-id": {
+                            "type": "string",
+                            "required": False,
+                            "description": "Author",
+                        },
+                        "user.id": {
+                            "type": "string",
+                            "required": False,
+                            "description": "Reviewer",
+                        },
+                    }
+                }
+            )
+        )
+
+        assert sorted(_advertised(built)) == ["user_id", "user_id_2"]
+
+        _, sent = _invoke(builder, built, {"user_id": "a", "user_id_2": "b"})
+
+        assert sent["json"] == {"user-id": "a", "user.id": "b"}
+
+    def test_a_name_reserved_by_python_or_adk_does_not_shadow_it(self, builder):
+        """ADK fills `tool_context` itself and `class` cannot be a parameter, so
+        neither can be declared verbatim — but the endpoint still wants them."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "tool_context": {
+                            "type": "string",
+                            "required": False,
+                            "description": "Context",
+                        },
+                        "class": {
+                            "type": "string",
+                            "required": False,
+                            "description": "Class",
+                        },
+                        "2fa": {
+                            "type": "string",
+                            "required": False,
+                            "description": "Second factor",
+                        },
+                    }
+                }
+            )
+        )
+
+        assert sorted(_advertised(built)) == ["class_", "p_2fa", "tool_context_"]
+
+        _, sent = _invoke(
+            builder,
+            built,
+            {"tool_context_": "a", "class_": "b", "p_2fa": "c"},
+        )
+
+        assert sent["json"] == {"tool_context": "a", "class": "b", "2fa": "c"}
+
+    @pytest.mark.parametrize(
+        "element_type, expected",
+        [
+            ("array", Type.ARRAY),
+            ("object", Type.OBJECT),
+            ("unheard-of", Type.STRING),
+            (None, Type.STRING),
+        ],
+        ids=["array", "object", "unknown", "missing"],
+    )
+    def test_every_level_of_an_array_declares_its_elements(
+        self, builder, element_type, expected
+    ):
+        """Gemini rejects an ARRAY that carries no `items` — at any depth. An
+        array of arrays therefore has to name the innermost element type too,
+        and the configuration only offers a flat name for it."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "tags": {
+                            "type": "array",
+                            "element_type": element_type,
+                            "required": False,
+                            "description": "Tags",
+                        }
+                    }
+                }
+            )
+        )
+
+        advertised = _advertised(built)["tags"]
+
+        assert advertised.type is Type.ARRAY
+        assert advertised.items.type is expected
+        if expected is Type.ARRAY:
+            assert advertised.items.items.type is Type.STRING
+
+    def test_parameter_descriptions_survive_in_the_tool_description(self, builder):
+        """ADK's schema carries no per-parameter description, so the generated
+        docstring is the only place the model can read what a parameter means."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Headline of the note",
+                        }
+                    }
+                }
+            )
+        )
+
+        declaration = built._get_declaration()
+
+        assert declaration.parameters.properties["title"].description is None
+        assert "Headline of the note" in declaration.description
+
+    def test_an_aliased_parameter_is_documented_under_the_name_the_model_gets(
+        self, builder
+    ):
+        """The docstring is the only channel for a parameter's meaning, and it
+        used to name the configured `user-id` while the schema published
+        `user_id` — two names for one parameter, so the model picks the one ADK
+        then filters away. The configured name stays visible for whoever wrote
+        the configuration."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "user-id": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Author",
+                        }
+                    }
+                }
+            )
+        )
+
+        declaration = built._get_declaration()
+        (documented,) = [
+            line.strip()
+            for line in declaration.description.splitlines()
+            if "Author" in line
+        ]
+
+        assert sorted(declaration.parameters.properties) == ["user_id"]
+        assert documented.startswith("user_id "), documented
+        assert "user-id" in documented, documented
+
+    def test_an_ordinary_parameter_name_is_documented_exactly_as_configured(
+        self, builder
+    ):
+        """Naming the alias must not decorate the common case: a name Python
+        accepts as-is has no stand-in to disambiguate from."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "title": {
+                            "type": "string",
+                            "required": True,
+                            "description": "Headline of the note",
+                        }
+                    }
+                }
+            )
+        )
+
+        (documented,) = [
+            line.strip()
+            for line in built._get_declaration().description.splitlines()
+            if "Headline" in line
+        ]
+
+        assert documented == "title (string, Required): Headline of the note"
+
+
+class TestArrayBodyToolsAdvertiseTheirArrayParameter:
+    """`body_type: array` sends the array parameter as the whole request body.
+
+    Only ToolBuilder reads that shape, and with no signature the model could
+    never fill it, so such a tool posted an empty array on every call.
+    """
+
+    def _built(self):
+        return ToolBuilder()._create_http_tool(
+            _http_config(
+                name="push_items",
+                description="Pushes items",
+                endpoint="https://example.test/items",
+                parameters={
+                    "body_type": "array",
+                    "array_param": "items",
+                    "body_params": {
+                        "items": {
+                            "type": "array",
+                            "element_type": "string",
+                            "required": True,
+                            "description": "Items to push",
+                        }
+                    },
+                },
+            )
+        )
+
+    def test_the_array_parameter_is_the_only_one_advertised(self):
+        advertised = _advertised(self._built())
+
+        assert sorted(advertised) == ["items"]
+        assert advertised["items"].type is Type.ARRAY
+        assert advertised["items"].items.type is Type.STRING
+
+    def test_a_model_supplied_list_becomes_the_request_body(self):
+        _, sent = _invoke(ToolBuilder, self._built(), {"items": ["a", "b"]})
+
+        assert sent["json"] == ["a", "b"]
+
+    def test_a_required_array_body_is_asked_for_instead_of_sent_empty(self):
+        """The array *is* the body, so advertising a required one as optional
+        let ADK fire the call with `[]` — an empty push the endpoint reads as a
+        legitimate request."""
+
+        result, sent = _invoke(ToolBuilder, self._built(), {})
+
+        assert sent is None, "an incomplete call must not hit the endpoint"
+        assert "items" in result["error"]
+
+    def test_an_optional_array_body_still_fires_without_it(self):
+        built = ToolBuilder()._create_http_tool(
+            _http_config(
+                name="push_items",
+                description="Pushes items",
+                endpoint="https://example.test/items",
+                parameters={
+                    "body_type": "array",
+                    "array_param": "items",
+                    "body_params": {
+                        "items": {
+                            "type": "array",
+                            "element_type": "string",
+                            "required": False,
+                            "description": "Items to push",
+                        }
+                    },
+                },
+            )
+        )
+
+        _, sent = _invoke(ToolBuilder, built, {})
+
+        assert sent is not None
+        assert sent["json"] == []
+
+
+@pytest.mark.parametrize("builder", BUILDERS, ids=lambda b: b.__name__)
+class TestMalformedParameterConfigStillBuildsATool:
+    """Parameter configuration is unvalidated JSON, so anything can be in it.
+
+    Tools attached by id are built one by one under a try/except, but the
+    inline http_tools are built in an unguarded loop: a single bad row raising
+    here took the whole agent build down with it.
+    """
+
+    def test_a_type_that_is_not_a_type_name_falls_back_to_string(self, builder):
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_params": {
+                        "payload": {
+                            "type": ["object"],
+                            "required": True,
+                            "description": "Payload",
+                        }
+                    }
+                }
+            )
+        )
+
+        assert _advertised(built)["payload"].type is Type.STRING
+
+    def test_a_parameter_name_that_is_not_a_string_is_skipped(self, builder):
+        built = builder()._create_http_tool(
+            _http_config(
+                parameters={
+                    "body_type": "array",
+                    "array_param": 123,
+                    "body_params": {},
+                }
+            )
+        )
+
+        assert built.func.__name__ == "create_note"
+        assert built._get_declaration().parameters is None
+
+    @pytest.mark.parametrize(
+        "param_config, expected",
+        [
+            ({"type": "string", "required": True}, "title (string, Required)"),
+            ({"required": True}, "title (string, Required)"),
+            ("a bare string", "title (string, Optional)"),
+            (None, "title (string, Optional)"),
+        ],
+        ids=["no-description", "no-type-either", "not-a-dict", "null"],
+    )
+    def test_an_incomplete_body_param_config_is_still_documented(
+        self, builder, param_config, expected
+    ):
+        """The docstring loop indexed `type` and `description` directly, so a
+        row the wizard never filled in raised while the tool was being built —
+        and an inline http_tool raising there takes the agent down with it."""
+
+        built = builder()._create_http_tool(
+            _http_config(parameters={"body_params": {"title": param_config}})
+        )
+
+        assert _advertised(built)["title"].type is Type.STRING
+        assert expected in built._get_declaration().description
+
+    def test_a_list_valued_query_param_of_numbers_is_still_documented(self, builder):
+        """A list-valued query param is joined and sent verbatim, so it never
+        reaches the schema — but the docstring still renders it, and joining
+        unvalidated JSON raw dies on the first element that is not a string."""
+
+        built = builder()._create_http_tool(
+            _http_config(parameters={"query_params": {"ids": [1, 2]}})
+        )
+
+        assert "ids: List[1, 2]" in built._get_declaration().description
+
+    @pytest.mark.parametrize(
+        "configured, expected",
+        [
+            (["a", 1], "a,1"),
+            (["a", True], "a,True"),
+            (["a", None], "a,None"),
+        ],
+        ids=["int", "bool", "null"],
+    )
+    def test_a_list_valued_query_param_of_numbers_still_reaches_the_endpoint(
+        self, builder, configured, expected
+    ):
+        """The docstring loop was taught to coerce, the request path was not:
+        the raw join raised inside the tool closure, the broad except swallowed
+        it, and the tool answered with its fallback instead of requesting."""
+
+        built = builder()._create_http_tool(
+            _http_config(
+                name="search_notes",
+                description="Searches notes",
+                method="GET",
+                endpoint="https://example.test/search",
+                parameters={"query_params": {"tags": configured}},
+            )
+        )
+
+        result, sent = _invoke(builder, built, {})
+
+        assert sent is not None, "the tool answered its fallback instead of requesting"
+        assert sent["params"] == {"tags": expected}
+        assert result == '{"ok": true}'
