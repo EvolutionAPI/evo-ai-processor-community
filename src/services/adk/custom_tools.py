@@ -34,6 +34,7 @@ import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
+from src.utils.tool_naming import sanitize_tool_name
 
 logger = setup_logger(__name__)
 
@@ -234,8 +235,12 @@ class CustomToolBuilder:
         String containing the response in JSON format
         """
 
-        # Defines the function name to be used by the ADK
-        http_tool.__name__ = name
+        # Defines the function name to be used by the ADK. Sanitize it: LLM
+        # providers reject tools[].function.name outside ^[a-zA-Z0-9_-]+$ (a
+        # space/accent breaks the whole turn). We dispatch this tool by
+        # __name__, so the sanitized name stays self-consistent; the readable
+        # label lives in __doc__/description.
+        http_tool.__name__ = sanitize_tool_name(name)
 
         return FunctionTool(func=http_tool)
 
