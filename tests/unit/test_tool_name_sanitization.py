@@ -14,6 +14,7 @@ from src.utils.tool_naming import (
     FALLBACK_TOOL_NAME,
     MAX_TOOL_NAME_LENGTH,
     sanitize_tool_name,
+    unique_tool_name,
 )
 
 OPENAI_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
@@ -61,3 +62,36 @@ def test_length_is_capped():
     result = sanitize_tool_name(long_name)
     assert len(result) <= MAX_TOOL_NAME_LENGTH
     assert OPENAI_PATTERN.match(result)
+
+
+@pytest.mark.parametrize(
+    "name", ["get_weather", "brave-search", "Tool123", "my__tool", "_private", "___"]
+)
+def test_a_name_the_providers_accept_is_returned_untouched(name):
+    # Squeezing underscores out of a name that already works would move the
+    # function name under a working agent's feet for no gain.
+    assert sanitize_tool_name(name) == name
+
+
+class TestUniqueToolName:
+    """Two tools answering to one name is the same 400 by another route, and the
+    dispatch would land on whichever the ADK found first."""
+
+    def test_a_free_name_is_just_the_sanitized_one(self):
+        assert unique_tool_name("testando ferramenta", set()) == "testando_ferramenta"
+
+    def test_distinct_names_that_collapse_alike_stay_distinct(self):
+        assert (
+            unique_tool_name("minha ferramenta", {"minha_ferramenta"})
+            == "minha_ferramenta_2"
+        )
+
+    def test_it_numbers_until_it_finds_a_gap(self):
+        taken = {"tool_x", "tool_x_2", "tool_x_3"}
+        assert unique_tool_name("tool_x", taken) == "tool_x_4"
+
+    def test_the_numbered_name_still_fits_the_provider_limits(self):
+        base = "a" * MAX_TOOL_NAME_LENGTH
+        result = unique_tool_name(base, {base})
+        assert len(result) <= MAX_TOOL_NAME_LENGTH
+        assert OPENAI_PATTERN.match(result)

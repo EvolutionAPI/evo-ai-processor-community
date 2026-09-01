@@ -27,13 +27,13 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Dict, List
+from typing import Any, Container, Dict, List
 from google.adk.tools import FunctionTool
 import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
-from src.utils.tool_naming import sanitize_tool_name
+from src.utils.tool_naming import sanitize_tool_name, unique_tool_name
 from src.services.adk.custom_tools import CustomToolBuilder, strip_modes_meta
 from src.services.adk.tools import exit_loop
 from src.services.adk.tools import create_text_to_speech_tool
@@ -82,8 +82,14 @@ class ToolBuilder:
     def __init__(self):
         self.tools = []
 
-    def _create_http_tool(self, tool_config: Dict[str, Any]) -> FunctionTool:
-        """Create an HTTP tool based on the provided configuration."""
+    def _create_http_tool(
+        self, tool_config: Dict[str, Any], taken_names: Container[str] = ()
+    ) -> FunctionTool:
+        """Create an HTTP tool based on the provided configuration.
+
+        `taken_names` are the function names already registered on this agent, so
+        two tools never answer to the same one.
+        """
         name = tool_config["name"]
         description = tool_config["description"]
         endpoint = tool_config["endpoint"]
@@ -259,12 +265,14 @@ class ToolBuilder:
         String containing the response in JSON format
         """
 
-        # Defines the function name to be used by the ADK. Sanitize it: LLM
-        # providers reject tools[].function.name outside ^[a-zA-Z0-9_-]+$ (a
-        # space/accent breaks the whole turn). We dispatch this tool by
-        # __name__, so the sanitized name stays self-consistent; the readable
-        # label lives in __doc__/description.
-        http_tool.__name__ = sanitize_tool_name(name)
+        # The name the ADK dispatches by, coerced to what the providers accept
+        # (a space/accent in it breaks the whole turn). It has to be set before
+        # FunctionTool reads it — the tool answers to the name captured there.
+        http_tool.__name__ = unique_tool_name(name, taken_names)
+        if http_tool.__name__ != name:
+            logger.info(
+                f"Custom tool '{name}' is exposed to the LLM as '{http_tool.__name__}'"
+            )
 
         return FunctionTool(func=http_tool)
 
@@ -313,17 +321,23 @@ class ToolBuilder:
         ):
             http_tools = agent_config["tools"].get("http_tools", [])
 
+        taken_names = set(built_from_ids)
         for http_tool_config in http_tools:
             # An http_tool that carries the name of a tool already built from its ID
             # is that same tool, expanded into the config. The ID is the fresher
-            # source — the expanded copy can be a stale snapshot — so skip it.
-            if http_tool_config.get("name") in built_from_ids:
+            # source — the expanded copy can be a stale snapshot — so skip it. The
+            # comparison is on the sanitized name: that is the one the tool built
+            # from the id ended up answering to.
+            expanded_name = http_tool_config.get("name")
+            if expanded_name and sanitize_tool_name(expanded_name) in built_from_ids:
                 logger.debug(
-                    f"Skipping http_tool '{http_tool_config.get('name')}': "
+                    f"Skipping http_tool '{expanded_name}': "
                     "already built from custom_tool_ids"
                 )
                 continue
-            self.tools.append(self._create_http_tool(http_tool_config))
+            http_tool = self._create_http_tool(http_tool_config, taken_names)
+            taken_names.add(http_tool.func.__name__)
+            self.tools.append(http_tool)
 
         # Add exit_loop tool if specified in configuration
         if agent_config.get("enable_exit_loop", False):

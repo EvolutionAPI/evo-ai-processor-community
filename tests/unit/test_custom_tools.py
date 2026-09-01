@@ -21,6 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.services import agent_service, custom_tool_service
 from src.services.adk.custom_tools import MODES_META_KEYS, CustomToolBuilder
 from src.services.adk.tool_builder import ToolBuilder
+from src.utils.tool_naming import sanitize_tool_name
 
 
 MODES_META = {"input": "nothing", "output": "an advice"}
@@ -121,29 +122,37 @@ class TestHttpToolNameSanitization:
     the __name__ they dispatch by. Reverting the sanitize call at either site
     makes these fail (the raw space survives)."""
 
+    @staticmethod
+    def _config(name):
+        return {
+            "name": name,
+            "description": "x",
+            "endpoint": "https://example.com",
+            "method": "GET",
+        }
+
     @pytest.mark.parametrize("builder_cls", BUILDERS)
     def test_a_space_in_the_name_is_sanitized(self, builder_cls):
-        built = builder_cls()._create_http_tool(
-            {
-                "name": "testando ferramenta",
-                "description": "x",
-                "endpoint": "https://example.com",
-                "method": "GET",
-            }
-        )
+        built = builder_cls()._create_http_tool(self._config("testando ferramenta"))
         assert built.func.__name__ == "testando_ferramenta"
+        # FunctionTool captures the dispatch name on construction while the
+        # declaration is generated from the live __name__: renaming after this
+        # point would send one name and answer to another.
+        assert built.name == built.func.__name__
 
     @pytest.mark.parametrize("builder_cls", BUILDERS)
     def test_a_valid_name_is_preserved(self, builder_cls):
-        built = builder_cls()._create_http_tool(
-            {
-                "name": "get_weather",
-                "description": "x",
-                "endpoint": "https://example.com",
-                "method": "GET",
-            }
-        )
+        built = builder_cls()._create_http_tool(self._config("get_weather"))
         assert built.func.__name__ == "get_weather"
+
+    @pytest.mark.parametrize("builder_cls", BUILDERS)
+    def test_two_names_that_collapse_alike_get_distinct_ones(self, builder_cls):
+        builder = builder_cls()
+        first = builder._create_http_tool(self._config("minha ferramenta"))
+        second = builder._create_http_tool(
+            self._config("minha_ferramenta"), {first.name}
+        )
+        assert (first.name, second.name) == ("minha_ferramenta", "minha_ferramenta_2")
 
 
 class TestReconstructCustomConfigurations:
@@ -258,6 +267,22 @@ class TestAToolAttachedByIdIsRegisteredOnce:
             built = ToolBuilder().build_tools(config, db=_fake_db())
 
         assert [t.func.__name__ for t in built] == ["advice"]
+
+    @pytest.mark.parametrize("builder", BUILDERS, ids=lambda b: b.__name__)
+    @pytest.mark.parametrize("name", ["testando ferramenta", "my__tool"])
+    def test_a_name_that_gets_sanitized_is_still_built_once(self, builder, name):
+        """CRM-499: the tool built from the id answers to the sanitized name
+        while the expanded copy still carries the raw one. Comparing the two
+        spellings let the copy through — the tool was registered twice under a
+        single name, which is the same rejected payload by another route."""
+
+        tool = _tool(name)
+        config = self._expanded_config(tool)
+
+        with patch.object(custom_tool_service, "get_custom_tool", return_value=tool):
+            built = builder().build_tools(config, db=_fake_db())
+
+        assert [t.func.__name__ for t in built] == [sanitize_tool_name(name)]
 
     def test_an_inline_tool_of_its_own_still_gets_built(self):
         """Only the expanded copies are dropped — a legacy inline tool that is not
