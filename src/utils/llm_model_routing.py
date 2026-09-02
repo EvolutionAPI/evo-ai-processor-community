@@ -11,6 +11,31 @@ from typing import Optional, Tuple
 
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
 
+PERPLEXITY_PREFIX = "perplexity/"
+RESPONSES_MARKER = "responses/"
+
+
+def _route_perplexity_through_responses(model: str) -> Tuple[str, dict]:
+    """Route a Perplexity Responses-API model to ``/v1/responses``.
+
+    Perplexity's catalogue splits by shape: a single segment is a retired Chat
+    Completions id, a sub-path is a current one, and only the latter accepts
+    tools. The ``responses/`` marker keeps provider detection from reducing
+    ``perplexity/perplexity/sonar`` to the legacy chat entry of the same name,
+    and ``allowed_openai_params`` gets ``tools`` past the chat config LiteLLM
+    validates against before it bridges.
+    """
+    remainder = model[len(PERPLEXITY_PREFIX) :]
+    extra_kwargs = {"allowed_openai_params": ["tools"]}
+
+    if remainder.startswith(RESPONSES_MARKER):
+        return model, extra_kwargs
+
+    if "/" not in remainder:
+        return model, {}
+
+    return f"{PERPLEXITY_PREFIX}{RESPONSES_MARKER}{remainder}", extra_kwargs
+
 
 def normalize_model_for_provider(
     model: str, provider: Optional[str]
@@ -24,9 +49,15 @@ def normalize_model_for_provider(
     has no vendor at all we default to ``openai`` (the most common path via
     OpenRouter). Idempotent for already-prefixed values.
 
+    Perplexity is routed by the model id rather than the provider, because the
+    vendor is already part of the id — see
+    :func:`_route_perplexity_through_responses`.
+
     Returns ``(normalized_model, extra_litellm_kwargs)``.
     """
     if provider != "openrouter":
+        if model and model.startswith(PERPLEXITY_PREFIX):
+            return _route_perplexity_through_responses(model)
         return model, {}
 
     extra_kwargs = {"api_base": OPENROUTER_API_BASE}
