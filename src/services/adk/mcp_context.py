@@ -45,6 +45,36 @@ logger = setup_logger(__name__)
 MCP_CONNECTION_TIMEOUT = settings.MCP_CONNECTION_TIMEOUT
 
 
+# Header names whose VALUE is safe to log, mirroring `safeHeaderNames` in the Go
+# secretmerge package. The map is free-form, so a denylist misses `X-API-Key`,
+# `X-Tenant-Auth` and every custom credential header; an allowlist fails closed.
+_SAFE_HEADER_NAMES = frozenset(
+    {
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "cache-control",
+        "connection",
+        "content-type",
+        "user-agent",
+        "x-request-id",
+        "x-correlation-id",
+    }
+)
+
+
+def _loggable_headers(headers):
+    """Returns the header map with every non-safe VALUE replaced by a marker.
+
+    The NAMES survive: knowing which headers were sent is the diagnostic value,
+    and it carries no secret.
+    """
+    return {
+        key: (value if key.lower() in _SAFE_HEADER_NAMES else "***masked***")
+        for key, value in (headers or {}).items()
+    }
+
+
 @asynccontextmanager
 async def mcp_context(
     server_cfg: Dict[str, Any],
@@ -100,22 +130,9 @@ async def mcp_context(
             if "Connection" not in headers:
                 headers["Connection"] = "keep-alive"
             
-            # Log header values (mask sensitive data)
-            header_info = {}
-            for key, value in headers.items():
-                if key.lower() == "authorization" and value:
-                    # Mask token but show first/last few chars
-                    token_str = str(value)
-                    if len(token_str) > 20:
-                        header_info[key] = f"{token_str[:10]}...{token_str[-10:]}"
-                    else:
-                        header_info[key] = "***masked***"
-                else:
-                    header_info[key] = value
-            
             logger.info(
-                f"Using StreamableHTTP for {url}. Headers: {list(headers.keys())}, "
-                f"Header values: {header_info}"
+                f"Using StreamableHTTP for {url}. "
+                f"Headers: {sorted(_loggable_headers(headers))}"
             )
             # Use adjusted URL (may include /mcp for Stripe)
             params = StreamableHTTPServerParams(
@@ -134,11 +151,10 @@ async def mcp_context(
         args = server_cfg.get("args", [])
         env = server_cfg.get("env", {})
 
-        # Adds environment variables if specified
-        if env:
-            for key, value in env.items():
-                os.environ[key] = value
-
+        # The env vars go to the CHILD process only, through StdioServerParameters.
+        # Writing them into the processor's own os.environ was redundant and
+        # never undone, so one agent's token leaked into every MCP subprocess
+        # spawned afterwards — across tenants in the enterprise build.
         params = StdioServerParameters(command=command, args=args, env=env)
 
     try:
@@ -222,12 +238,9 @@ async def mcp_context(
             
             # Log all headers being sent (masked)
             header_info = {}
-            for key, value in headers.items():
-                if key.lower() == "authorization":
-                    header_info[key] = f"Bearer {token_preview if 'token_preview' in locals() else '***masked***'}"
-                else:
-                    header_info[key] = value
-            logger.error(f"Headers sent to MCP server: {list(headers.keys())}, Header values: {header_info}")
+            logger.error(
+                f"Headers sent to MCP server: {sorted(_loggable_headers(headers))}"
+            )
             
             # Try to extract more error details from the exception
             if hasattr(e, '__cause__') and e.__cause__:

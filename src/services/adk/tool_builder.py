@@ -27,12 +27,13 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Dict, List
+from typing import Any, Container, Dict, List
 from google.adk.tools import FunctionTool
 import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
+from src.utils.tool_naming import sanitize_tool_name, unique_tool_name
 from src.services.adk.custom_tools import CustomToolBuilder, strip_modes_meta
 from src.services.adk.tools import exit_loop
 from src.services.adk.tools import create_text_to_speech_tool
@@ -40,17 +41,63 @@ from src.services.adk.tools import create_text_to_speech_tool
 logger = setup_logger(__name__)
 
 
+
+
+def _nexus_credential_ref(config):
+    """Adapts the Nexus dialog's scalar credential_id to the map shape the tool
+    and MCP paths use."""
+    credential_id = config.get("credential_id")
+    return {"nexus_api_key": credential_id} if credential_id else {}
+
+def _apply_vault_refs(tool_config, headers, _db=None):
+    """Resolves headers that point at the credential vault.
+
+    Opens its own short-lived session because neither tool builder carries one.
+    Any failure falls back to the inline headers, so a vault outage degrades to
+    today's behaviour instead of breaking the tool.
+    """
+    credential_refs = tool_config.get("credential_refs") or {}
+    if not credential_refs:
+        return headers
+
+    from src.config.database import SessionLocal
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    session = SessionLocal()
+    try:
+        return resolve_credential_refs(
+            headers,
+            credential_refs,
+            vault=DatabaseCredentialVault(session),
+            decrypt=decrypt_api_key,
+        )
+    finally:
+        session.close()
+
 class ToolBuilder:
     def __init__(self):
         self.tools = []
 
-    def _create_http_tool(self, tool_config: Dict[str, Any]) -> FunctionTool:
-        """Create an HTTP tool based on the provided configuration."""
+    def _create_http_tool(
+        self, tool_config: Dict[str, Any], taken_names: Container[str] = ()
+    ) -> FunctionTool:
+        """Create an HTTP tool based on the provided configuration.
+
+        `taken_names` are the function names already registered on this agent, so
+        two tools never answer to the same one.
+        """
         name = tool_config["name"]
         description = tool_config["description"]
         endpoint = tool_config["endpoint"]
         method = tool_config["method"]
         headers = tool_config.get("headers", {})
+        # Second header-injection path: hardening only one of the two would
+        # leave the other echoing inline secrets.
+        headers = _apply_vault_refs(tool_config, headers)
         parameters = tool_config.get("parameters", {}) or {}
         values = strip_modes_meta(tool_config.get("values"))
         error_handling = tool_config.get("error_handling", {})
@@ -218,8 +265,14 @@ class ToolBuilder:
         String containing the response in JSON format
         """
 
-        # Defines the function name to be used by the ADK
-        http_tool.__name__ = name
+        # The name the ADK dispatches by, coerced to what the providers accept
+        # (a space/accent in it breaks the whole turn). It has to be set before
+        # FunctionTool reads it — the tool answers to the name captured there.
+        http_tool.__name__ = unique_tool_name(name, taken_names)
+        if http_tool.__name__ != name:
+            logger.info(
+                f"Custom tool '{name}' is exposed to the LLM as '{http_tool.__name__}'"
+            )
 
         return FunctionTool(func=http_tool)
 
@@ -268,17 +321,23 @@ class ToolBuilder:
         ):
             http_tools = agent_config["tools"].get("http_tools", [])
 
+        taken_names = set(built_from_ids)
         for http_tool_config in http_tools:
             # An http_tool that carries the name of a tool already built from its ID
             # is that same tool, expanded into the config. The ID is the fresher
-            # source — the expanded copy can be a stale snapshot — so skip it.
-            if http_tool_config.get("name") in built_from_ids:
+            # source — the expanded copy can be a stale snapshot — so skip it. The
+            # comparison is on the sanitized name: that is the one the tool built
+            # from the id ended up answering to.
+            expanded_name = http_tool_config.get("name")
+            if expanded_name and sanitize_tool_name(expanded_name) in built_from_ids:
                 logger.debug(
-                    f"Skipping http_tool '{http_tool_config.get('name')}': "
+                    f"Skipping http_tool '{expanded_name}': "
                     "already built from custom_tool_ids"
                 )
                 continue
-            self.tools.append(self._create_http_tool(http_tool_config))
+            http_tool = self._create_http_tool(http_tool_config, taken_names)
+            taken_names.add(http_tool.func.__name__)
+            self.tools.append(http_tool)
 
         # Add exit_loop tool if specified in configuration
         if agent_config.get("enable_exit_loop", False):
@@ -423,6 +482,13 @@ class ToolBuilder:
                     knowledge_nexus_config.get("nexus_api_key")
                     or knowledge_nexus_config.get("apiKey")
                 )
+                # Only the key goes to the vault: nexus_base_url and space_id
+                # are the address, and keeping them out is what lets one
+                # credential serve agents pointing at different spaces.
+                api_key = _apply_vault_refs(
+                    {"credential_refs": _nexus_credential_ref(knowledge_nexus_config)},
+                    {"nexus_api_key": api_key},
+                ).get("nexus_api_key")
                 space_id = (
                     knowledge_nexus_config.get("space_id")
                     or knowledge_nexus_config.get("spaceId")
@@ -506,6 +572,8 @@ class ToolBuilder:
                 from src.services.adk.tools.google_calendar import (
                     create_check_availability_tool,
                     create_calendar_event_tool,
+                    create_cancel_event_tool,
+                    create_edit_event_tool,
                 )
 
                 # Use agent_id from parameter if available, otherwise try to get from config
@@ -534,8 +602,28 @@ class ToolBuilder:
                         )
                     )
 
+                    # Add cancel_event tool with configs from agent.config.integrations
+                    self.tools.append(
+                        create_cancel_event_tool(
+                            agent_id=effective_agent_id,
+                            calendar_config=google_calendar_config,
+                            credentials_config=google_calendar_credentials,
+                            db=db
+                        )
+                    )
+
+                    # Add edit_event tool with configs from agent.config.integrations
+                    self.tools.append(
+                        create_edit_event_tool(
+                            agent_id=effective_agent_id,
+                            calendar_config=google_calendar_config,
+                            credentials_config=google_calendar_credentials,
+                            db=db
+                        )
+                    )
+
                     logger.info(
-                        f"Added Google Calendar tools (check_availability, create_event) "
+                        f"Added Google Calendar tools (check_availability, create_event, cancel_event, edit_event) "
                         f"for agent {effective_agent_id}"
                     )
             except Exception as e:

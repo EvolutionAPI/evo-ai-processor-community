@@ -99,6 +99,8 @@ def create_pipeline_manipulation_tool(
     client = EvoCrmClient()
     default_pipeline_rules = pipeline_rules or []
 
+    # The docstring below is REPLACED at the end of this factory; the rewritten
+    # one is what becomes the schema the model reads.
     async def pipeline_manipulation(
         action: str,
         contact_id: Optional[str] = None,
@@ -144,8 +146,10 @@ def create_pipeline_manipulation_tool(
                    - 'create_task': Create a new task
                    - 'update_task': Update an existing task
                    - 'complete_task': Mark a task as completed
-            contact_id: ID of the contact (optional, auto-extracted from context)
-            conversation_id: ID of the conversation (optional, auto-extracted from context)
+            contact_id: DO NOT SET. The conversation context supplies it and
+                   overrides anything passed here.
+            conversation_id: DO NOT SET. The conversation context supplies it and
+                   overrides anything passed here.
             pipeline_id: ID of the pipeline (optional if only one pipeline is configured)
             stage_id: ID of the stage to move to (for move_to_stage, use stage_id OR stage_name)
             stage_name: Name of the stage to move to (alternative to stage_id, e.g. "Em Progresso")
@@ -169,18 +173,29 @@ def create_pipeline_manipulation_tool(
             }
         """
         try:
-            # Extract IDs from metadata if not provided
-            effective_contact_id = contact_id
-            if not effective_contact_id and tool_context:
-                effective_contact_id = _extract_contact_id_from_metadata(tool_context)
-                if effective_contact_id:
-                    logger.info(f"Extracted contact_id from metadata: {effective_contact_id}")
+            # CRM-237: the conversation/contact of a turn is a fact of the context, not a
+            # model choice — the prompt already promises the id is auto-extracted. Metadata
+            # wins; the model's argument only stands when the context is silent.
+            context_contact_id = _extract_contact_id_from_metadata(tool_context) if tool_context else None
+            context_conversation_id = _extract_conversation_id_from_metadata(tool_context) if tool_context else None
 
-            effective_conversation_id = conversation_id
-            if not effective_conversation_id and tool_context:
-                effective_conversation_id = _extract_conversation_id_from_metadata(tool_context)
-                if effective_conversation_id:
-                    logger.info(f"Extracted conversation_id from metadata: {effective_conversation_id}")
+            effective_contact_id = context_contact_id or contact_id
+            if context_contact_id:
+                if contact_id and contact_id != context_contact_id:
+                    logger.warning(
+                        f"[CRM-237] ignoring contact_id={contact_id!r} from the model; "
+                        f"the conversation's contact is {context_contact_id}"
+                    )
+                logger.info(f"Extracted contact_id from metadata: {effective_contact_id}")
+
+            effective_conversation_id = context_conversation_id or conversation_id
+            if context_conversation_id:
+                if conversation_id and conversation_id != context_conversation_id:
+                    logger.warning(
+                        f"[CRM-237] ignoring conversation_id={conversation_id!r} from the model; "
+                        f"the current conversation is {context_conversation_id}"
+                    )
+                logger.info(f"Extracted conversation_id from metadata: {effective_conversation_id}")
 
             # Get pipeline_rules from tool context if not provided during tool creation
             available_pipeline_rules = default_pipeline_rules
@@ -324,10 +339,16 @@ def create_pipeline_manipulation_tool(
     - update_task: Update an existing task
     - complete_task: Mark a task as completed{pipeline_rules_doc}
 
+    Use move_to_stage for a conversation that already has a card in the pipeline
+    (the normal case for an ongoing conversation); use add_to_pipeline only for a
+    conversation that is not in any pipeline yet.
+
     Args:
         action: The action to perform
-        contact_id: ID of the contact (optional, auto-extracted)
-        conversation_id: ID of the conversation (optional, auto-extracted)
+        contact_id: DO NOT SET. Supplied by the conversation context, which
+            overrides anything passed here.
+        conversation_id: DO NOT SET. Supplied by the conversation context, which
+            overrides anything passed here.
         pipeline_id: ID of the pipeline (optional if only one configured)
         stage_id: ID of the stage (required for move_to_stage)
         notes: Optional notes
@@ -364,7 +385,7 @@ async def _add_to_pipeline(
     if not contact_id and not conversation_id:
         return {
             "status": "error",
-            "message": "Either contact_id or conversation_id is required to add to pipeline.",
+            "message": "No contact or conversation in context: this tool only runs inside a conversation.",
             "action": "add_to_pipeline",
         }
 
@@ -444,7 +465,7 @@ async def _move_to_stage(
     if not conversation_id:
         return {
             "status": "error",
-            "message": "conversation_id is required to move to a different stage.",
+            "message": "No conversation in context: this tool only runs inside a conversation.",
             "action": "move_to_stage",
         }
 
@@ -538,7 +559,7 @@ async def _create_task(
     if not conversation_id:
         return {
             "status": "error",
-            "message": "conversation_id is required to create a task.",
+            "message": "No conversation in context: this tool only runs inside a conversation.",
             "action": "create_task",
         }
 

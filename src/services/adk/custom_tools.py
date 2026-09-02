@@ -27,13 +27,14 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Container, Dict, List, Optional
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 import requests
 import json
 import urllib.parse
 from src.utils.logger import setup_logger
+from src.utils.tool_naming import sanitize_tool_name, unique_tool_name
 
 logger = setup_logger(__name__)
 
@@ -61,17 +62,56 @@ def exit_loop(tool_context: ToolContext):
     return {}
 
 
+
+def _apply_vault_refs(tool_config, headers, _db=None):
+    """Resolves headers that point at the credential vault.
+
+    Opens its own short-lived session because neither tool builder carries one.
+    Any failure falls back to the inline headers, so a vault outage degrades to
+    today's behaviour instead of breaking the tool.
+    """
+    credential_refs = tool_config.get("credential_refs") or {}
+    if not credential_refs:
+        return headers
+
+    from src.config.database import SessionLocal
+    from src.services.adk.integration_credentials import (
+        DatabaseCredentialVault,
+        resolve_credential_refs,
+    )
+    from src.utils.crypto import decrypt_api_key
+
+    session = SessionLocal()
+    try:
+        return resolve_credential_refs(
+            headers,
+            credential_refs,
+            vault=DatabaseCredentialVault(session),
+            decrypt=decrypt_api_key,
+        )
+    finally:
+        session.close()
+
 class CustomToolBuilder:
     def __init__(self):
         self.tools = []
 
-    def _create_http_tool(self, tool_config: Dict[str, Any]) -> FunctionTool:
-        """Create an HTTP tool based on the provided configuration."""
+    def _create_http_tool(
+        self, tool_config: Dict[str, Any], taken_names: Container[str] = ()
+    ) -> FunctionTool:
+        """Create an HTTP tool based on the provided configuration.
+
+        `taken_names` are the function names already registered on this agent, so
+        two tools never answer to the same one.
+        """
         name = tool_config["name"]
         description = tool_config["description"]
         endpoint = tool_config["endpoint"]
         method = tool_config["method"]
         headers = tool_config.get("headers", {})
+        # A header pointing at the vault takes its value from there; the inline
+        # one stays the fallback.
+        headers = _apply_vault_refs(tool_config, headers)
         parameters = tool_config.get("parameters", {}) or {}
         values = strip_modes_meta(tool_config.get("values"))
         error_handling = tool_config.get("error_handling", {})
@@ -201,8 +241,14 @@ class CustomToolBuilder:
         String containing the response in JSON format
         """
 
-        # Defines the function name to be used by the ADK
-        http_tool.__name__ = name
+        # The name the ADK dispatches by, coerced to what the providers accept
+        # (a space/accent in it breaks the whole turn). It has to be set before
+        # FunctionTool reads it — the tool answers to the name captured there.
+        http_tool.__name__ = unique_tool_name(name, taken_names)
+        if http_tool.__name__ != name:
+            logger.info(
+                f"Custom tool '{name}' is exposed to the LLM as '{http_tool.__name__}'"
+            )
 
         return FunctionTool(func=http_tool)
 
@@ -226,6 +272,7 @@ class CustomToolBuilder:
             db: Database session (required when using custom_tool_ids)
         """
         self.tools = []
+        taken_names = set()
 
         # Process custom_tool_ids - fetch from database
         custom_tool_ids = tools_config.get("custom_tool_ids", [])
@@ -275,7 +322,8 @@ class CustomToolBuilder:
                     }
 
                     # Create and add the tool
-                    http_tool = self._create_http_tool(tool_config)
+                    http_tool = self._create_http_tool(tool_config, taken_names)
+                    taken_names.add(http_tool.func.__name__)
                     self.tools.append(http_tool)
                     logger.info(f"Added custom tool from database: {custom_tool.name}")
 
@@ -298,18 +346,22 @@ class CustomToolBuilder:
         ):
             http_tools = tools_config["tools"].get("http_tools", [])
 
-        built_from_ids = {tool.func.__name__ for tool in self.tools}
+        built_from_ids = set(taken_names)
         for http_tool_config in http_tools:
             # The http_tools of an agent that also carries custom_tool_ids are those
             # same tools expanded into its config. Building both registers the tool
-            # twice under one name.
-            if http_tool_config.get("name") in built_from_ids:
+            # twice under one name. The comparison is on the sanitized name: that is
+            # the one the tool built from the id ended up answering to.
+            expanded_name = http_tool_config.get("name")
+            if expanded_name and sanitize_tool_name(expanded_name) in built_from_ids:
                 logger.debug(
-                    f"Skipping http_tool '{http_tool_config.get('name')}': "
+                    f"Skipping http_tool '{expanded_name}': "
                     "already built from custom_tool_ids"
                 )
                 continue
-            self.tools.append(self._create_http_tool(http_tool_config))
+            http_tool = self._create_http_tool(http_tool_config, taken_names)
+            taken_names.add(http_tool.func.__name__)
+            self.tools.append(http_tool)
 
         # Add exit_loop tool if specified in configuration
         if tools_config.get("enable_exit_loop", False):

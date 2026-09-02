@@ -34,6 +34,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 from src.services.evo_auth_service import get_auth_service, AuthenticationError, ServiceUnavailableError, NetworkError
 from src.services import agent_service
+from src.services.agent_service import AgentValidationError
 from src.config.database import get_db
 from src.utils.http import HttpUtils
 from src.utils.logger import setup_logger
@@ -97,6 +98,11 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                             )
 
                             return await call_next(request)
+                    except AgentValidationError as e:
+                        # EVO-2166: infra/DB error is transient -> 503 (retryable),
+                        # never a silent 401.
+                        logger.error(f"EvoAuth: infra error validating Agent API Key (/sync/ route): {e}")
+                        return self._service_unavailable_response("Agent authentication temporarily unavailable")
                     except Exception as e:
                         logger.warning(f"EvoAuth: Agent API Key validation failed for /sync/ route: {e}")
                     finally:
@@ -148,6 +154,11 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
                             )
 
                             return await call_next(request)
+                    except AgentValidationError as e:
+                        # EVO-2166: infra/DB error is transient -> 503 (retryable),
+                        # never a silent 401.
+                        logger.error(f"EvoAuth: infra error validating Agent API Key: {e}")
+                        return self._service_unavailable_response("Agent authentication temporarily unavailable")
                     except Exception as e:
                         logger.warning(f"EvoAuth: Agent API Key validation failed: {e}")
                     finally:
@@ -257,6 +268,11 @@ class EvoAuthMiddleware(BaseHTTPMiddleware):
             
         except AuthenticationError as e:
             return self._unauthorized_response(str(e))
+        except AgentValidationError as e:
+            # EVO-2166: covers the main agent-api-key path (try/finally) — infra
+            # error while validating the agent key -> 503 (retryable), not 401.
+            logger.error(f"EvoAuth: agent validation infra error: {e}")
+            return self._service_unavailable_response("Agent authentication temporarily unavailable")
         except NetworkError as e:
             return self._service_unavailable_response(str(e))
         except ServiceUnavailableError as e:

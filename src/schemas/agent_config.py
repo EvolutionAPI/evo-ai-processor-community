@@ -64,6 +64,16 @@ class MCPServerConfig(BaseModel):
     envs: Dict[str, str] = Field(
         default_factory=dict, description="Environment variables of the server"
     )
+    # The key the pipeline actually persists: the screen writes `environments`
+    # and the core rewrites the entry as {id, environments, tools}
+    # (config_processor.go:266,278-282). `envs` above is kept for older entries.
+    environments: Dict[str, str] = Field(
+        default_factory=dict, description="Environment variables of the server"
+    )
+    # Vault references, keyed by env var name.
+    credential_refs: Dict[str, str] = Field(
+        default_factory=dict, description="Vault credential ids by env var name"
+    )
     tools: List[str] = Field(
         default_factory=list, description="List of tools of the server"
     )
