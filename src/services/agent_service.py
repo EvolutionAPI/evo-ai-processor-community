@@ -406,17 +406,17 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
         # Reconstruct custom configurations from saved IDs
         _reconstruct_custom_configurations(db, agent)
 
-        # Sanitize agent name to a valid LLM function name (^[a-zA-Z0-9_-]+$).
+        # Coerce the agent name to a valid LLM function name (^[a-zA-Z0-9_-]+$).
         # str.isalnum() is True for accented chars ("café".isalnum() is True), so
         # the old inline guard let accents through and the provider 400'd on
-        # tools[].function.name when the agent is attached as a tool. Reuse the
-        # shared helper that CRM-499 introduced — CRM-501.
-        if agent.name:
-            sanitized_name = sanitize_tool_name(agent.name)
-            if sanitized_name != agent.name:
-                agent.name = sanitized_name
-                # Update in database
-                db.commit()
+        # tools[].function.name when the agent is attached as a tool. Call the
+        # shared helper unconditionally (CRM-499) — an empty/None name is also
+        # invalid, and its "tool" fallback fixes it too. Persist only on change.
+        sanitized_name = sanitize_tool_name(agent.name)
+        if sanitized_name != agent.name:
+            agent.name = sanitized_name
+            # Update in database
+            db.commit()
 
         # Sanitize agent configuration to prevent validation errors
         if agent.config and agent.type in ["sequential", "parallel", "loop"]:
@@ -515,14 +515,13 @@ def get_agents_by_account(
             _reconstruct_custom_configurations(db, agent)
 
             # Same as get_agent: coerce to a valid LLM function name via the
-            # shared helper — str.isalnum() lets accents through, so the old
-            # inline guard produced an invalid tools[].function.name — CRM-501.
-            if agent.name:
-                sanitized_name = sanitize_tool_name(agent.name)
-                if sanitized_name != agent.name:
-                    agent.name = sanitized_name
-                    # Update in database
-                    db.commit()
+            # shared helper (unconditional — str.isalnum() lets accents through
+            # and an empty/None name is invalid too). Persist only on change.
+            sanitized_name = sanitize_tool_name(agent.name)
+            if sanitized_name != agent.name:
+                agent.name = sanitized_name
+                # Update in database
+                db.commit()
 
             # Sanitize agent configurations to prevent validation errors
             if agent.config and agent.type in ["sequential", "parallel", "loop"]:

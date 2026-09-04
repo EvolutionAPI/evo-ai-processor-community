@@ -15,8 +15,10 @@ from unittest.mock import MagicMock
 from src.services.agent_service import get_agent, get_agents_by_account
 
 # Spelled out rather than imported from the helper: an assertion that reads the
-# module's own regex back would pass whatever that regex rots into.
-VALID_FUNCTION_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
+# module's own regex back would pass whatever that regex rots into. Used with
+# .fullmatch — .match on "^...$" would accept a trailing newline ($ matches
+# before a final \n in Python), the exact false-green this fix closes.
+VALID_FUNCTION_NAME = re.compile(r"[a-zA-Z0-9_-]+")
 
 
 def agent_named(name):
@@ -50,7 +52,7 @@ def test_get_agent_sanitizes_accented_name_to_valid_function_name():
 
     result = asyncio.run(get_agent(db, agent.id))
 
-    assert VALID_FUNCTION_NAME.match(result.name), (
+    assert VALID_FUNCTION_NAME.fullmatch(result.name), (
         f"name {result.name!r} is not a valid ^[a-zA-Z0-9_-]+$ function name — "
         "an accent 400s the provider (CRM-501)"
     )
@@ -63,7 +65,7 @@ def test_get_agents_by_account_sanitizes_accented_name():
 
     agents = get_agents_by_account(db)
 
-    assert VALID_FUNCTION_NAME.match(agents[0].name), agents[0].name
+    assert VALID_FUNCTION_NAME.fullmatch(agents[0].name), agents[0].name
     assert db.commit.called
 
 
@@ -77,3 +79,28 @@ def test_a_name_already_valid_is_left_untouched():
     result = asyncio.run(get_agent(db, agent.id))
 
     assert result.name == "valid-name_1"
+
+
+def test_empty_name_is_coerced_to_the_fallback_and_persists():
+    # An empty name is invalid for tools[].function.name too. The old `if
+    # agent.name` guard skipped it; now the helper's "tool" fallback fixes it.
+    agent = agent_named("")
+    db = db_returning(agent)
+
+    result = asyncio.run(get_agent(db, agent.id))
+
+    assert result.name == "tool"
+    assert db.commit.called, "the fallback must persist so it stops 400ing"
+
+
+def test_trailing_newline_name_is_sanitized_not_passed_through():
+    # Python's `$` matches before a final newline, so a `^...$` passthrough would
+    # keep "valid\n" — still an invalid function name. The helper (\A...\Z) must
+    # reject it and sanitize.
+    agent = agent_named("valid\n")
+    db = db_returning(agent)
+
+    result = asyncio.run(get_agent(db, agent.id))
+
+    assert "\n" not in result.name
+    assert VALID_FUNCTION_NAME.fullmatch(result.name), repr(result.name)

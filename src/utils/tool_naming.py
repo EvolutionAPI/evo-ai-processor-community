@@ -11,8 +11,10 @@ import re
 from itertools import count
 from typing import Container
 
-# What the providers accept verbatim.
-_VALID_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
+# What the providers accept verbatim. Anchored with \A...\Z (not ^...$): in
+# Python `$` also matches just before a trailing newline, so "valid\n" would
+# pass the check and be returned unchanged — still invalid for function.name.
+_VALID_NAME = re.compile(r"\A[a-zA-Z0-9_-]+\Z")
 # Anything outside that alphabet becomes a single separator.
 _INVALID_RUN = re.compile(r"[^a-zA-Z0-9_-]+")
 _REPEAT_UNDERSCORE = re.compile(r"_+")
