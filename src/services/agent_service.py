@@ -33,6 +33,7 @@ from fastapi import HTTPException, status
 from src.models.models import Agent
 from typing import List, Optional, Union, Dict, Any
 from src.services import custom_tool_service, custom_mcp_server_service
+from src.utils.tool_naming import sanitize_tool_name
 import uuid
 import logging
 
@@ -405,13 +406,17 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
         # Reconstruct custom configurations from saved IDs
         _reconstruct_custom_configurations(db, agent)
 
-        # Sanitize agent name if it contains spaces or special characters
-        if agent.name and any(c for c in agent.name if not (c.isalnum() or c == "_")):
-            agent.name = "".join(
-                c if c.isalnum() or c == "_" else "_" for c in agent.name
-            )
-            # Update in database
-            db.commit()
+        # Sanitize agent name to a valid LLM function name (^[a-zA-Z0-9_-]+$).
+        # str.isalnum() is True for accented chars ("café".isalnum() is True), so
+        # the old inline guard let accents through and the provider 400'd on
+        # tools[].function.name when the agent is attached as a tool. Reuse the
+        # shared helper that CRM-499 introduced — CRM-501.
+        if agent.name:
+            sanitized_name = sanitize_tool_name(agent.name)
+            if sanitized_name != agent.name:
+                agent.name = sanitized_name
+                # Update in database
+                db.commit()
 
         # Sanitize agent configuration to prevent validation errors
         if agent.config and agent.type in ["sequential", "parallel", "loop"]:
@@ -509,15 +514,15 @@ def get_agents_by_account(
             # Reconstruct custom configurations from saved IDs
             _reconstruct_custom_configurations(db, agent)
 
-            # Sanitize agent names if they contain spaces or special characters
-            if agent.name and any(
-                c for c in agent.name if not (c.isalnum() or c == "_")
-            ):
-                agent.name = "".join(
-                    c if c.isalnum() or c == "_" else "_" for c in agent.name
-                )
-                # Update in database
-                db.commit()
+            # Same as get_agent: coerce to a valid LLM function name via the
+            # shared helper — str.isalnum() lets accents through, so the old
+            # inline guard produced an invalid tools[].function.name — CRM-501.
+            if agent.name:
+                sanitized_name = sanitize_tool_name(agent.name)
+                if sanitized_name != agent.name:
+                    agent.name = sanitized_name
+                    # Update in database
+                    db.commit()
 
             # Sanitize agent configurations to prevent validation errors
             if agent.config and agent.type in ["sequential", "parallel", "loop"]:
