@@ -54,6 +54,27 @@ def strip_modes_meta(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _normalize_body_param(param_config: Any) -> Dict[str, Any]:
+    """Coerce a body param into the {type, required, description} schema.
+
+    Legacy tools stored each body param as a plain string instead of a schema
+    object. A string here would raise AttributeError while building the tool
+    docstring, so it is treated as a required string whose value is its
+    description.
+    """
+    if isinstance(param_config, dict):
+        return {
+            "type": param_config.get("type", "string"),
+            "required": param_config.get("required", False),
+            "description": param_config.get("description", ""),
+        }
+    return {
+        "type": "string",
+        "required": True,
+        "description": str(param_config) if param_config is not None else "",
+    }
+
+
 def exit_loop(tool_context: ToolContext):
     """Call this function ONLY when the process indicates no further iterations are needed, signaling the loop should end."""
     logger.info(f"[Tool Call] exit_loop triggered by {tool_context.agent_name}")
@@ -220,9 +241,10 @@ class CustomToolBuilder:
 
         # Adds body parameters
         for param, param_config in body_params.items():
-            required = "Required" if param_config.get("required", False) else "Optional"
+            schema = _normalize_body_param(param_config)
+            required = "Required" if schema["required"] else "Optional"
             param_docs.append(
-                f"{param} ({param_config['type']}, {required}): {param_config['description']}"
+                f"{param} ({schema['type']}, {required}): {schema['description']}"
             )
 
         # Adds default values
