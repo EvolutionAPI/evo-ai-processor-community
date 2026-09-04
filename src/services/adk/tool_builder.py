@@ -34,7 +34,11 @@ import json
 import urllib.parse
 from src.utils.logger import setup_logger
 from src.utils.tool_naming import sanitize_tool_name, unique_tool_name
-from src.services.adk.custom_tools import CustomToolBuilder, strip_modes_meta
+from src.services.adk.custom_tools import (
+    CustomToolBuilder,
+    _normalize_body_param,
+    strip_modes_meta,
+)
 from src.services.adk.tools import exit_loop
 from src.services.adk.tools import create_text_to_speech_tool
 
@@ -244,9 +248,10 @@ class ToolBuilder:
 
         # Adds body parameters
         for param, param_config in body_params.items():
-            required = "Required" if param_config.get("required", False) else "Optional"
+            schema = _normalize_body_param(param_config)
+            required = "Required" if schema["required"] else "Optional"
             param_docs.append(
-                f"{param} ({param_config['type']}, {required}): {param_config['description']}"
+                f"{param} ({schema['type']}, {required}): {schema['description']}"
             )
 
         # Adds default values

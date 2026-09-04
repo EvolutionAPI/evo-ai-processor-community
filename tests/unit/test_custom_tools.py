@@ -392,3 +392,39 @@ class TestReservedMetadataKeysNeverReachTheWire:
         )
 
         assert sent["params"] == {"format": "json", "lang": "pt"}
+
+
+@pytest.mark.parametrize("builder", BUILDERS, ids=lambda b: b.__name__)
+class TestLegacyStringBodyParamDoesNotCrash:
+    """Old tools stored each body param as a plain string ({"queryText": "{query}"})
+    instead of the {type, required, description} schema. Building the docstring
+    called `.get` on that string and raised AttributeError, breaking tool creation.
+    """
+
+    def _config(self):
+        return {
+            "name": "search",
+            "description": "Searches the KB",
+            "method": "POST",
+            "endpoint": "https://example.test/search",
+            "parameters": {"body_params": {"queryText": "{query}"}},
+            "values": {},
+        }
+
+    def test_building_the_tool_does_not_raise(self, builder):
+        built = builder()._create_http_tool(self._config())
+        assert built.func.__name__ == "search"
+
+    def test_the_param_is_exposed_in_the_docstring(self, builder):
+        built = builder()._create_http_tool(self._config())
+        assert "queryText" in built.func.__doc__
+
+    def test_the_llm_value_reaches_the_body(self, builder):
+        built = builder()._create_http_tool(self._config())
+        target = f"{builder.__module__}.requests.request"
+        with patch(target) as request:
+            request.return_value = MagicMock(
+                status_code=200, json=lambda: {"ok": True}
+            )
+            built.func(queryText="hello")
+        assert request.call_args.kwargs["json"] == {"queryText": "hello"}
