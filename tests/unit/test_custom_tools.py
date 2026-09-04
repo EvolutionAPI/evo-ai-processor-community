@@ -428,3 +428,106 @@ class TestLegacyStringBodyParamDoesNotCrash:
             )
             built.func(queryText="hello")
         assert request.call_args.kwargs["json"] == {"queryText": "hello"}
+
+
+@pytest.mark.parametrize("builder", BUILDERS, ids=lambda b: b.__name__)
+class TestBodyParamsAreDeclaredToTheLLM:
+    """CRM-527: the docstring is not a contract. The ADK builds the declaration
+    the model sees from the signature, so `http_tool(**kwargs)` offered a tool
+    with no arguments — the model called it with none and the body went out
+    empty (the 400 the card reports).
+    """
+
+    def _config(self, body_params):
+        return {
+            "name": "search",
+            "description": "Searches the KB",
+            "method": "POST",
+            "endpoint": "https://example.test/search",
+            "parameters": {"body_params": body_params},
+            "values": {},
+        }
+
+    def _declaration(self, builder, body_params):
+        built = builder()._create_http_tool(self._config(body_params))
+        return built._get_declaration()
+
+    def test_a_required_param_is_declared_and_required(self, builder):
+        declaration = self._declaration(
+            builder,
+            {"queryText": {"type": "string", "required": True, "description": "q"}},
+        )
+
+        assert declaration.parameters.properties["queryText"].type.value == "STRING"
+        assert declaration.parameters.required == ["queryText"]
+
+    def test_an_optional_param_is_declared_but_not_required(self, builder):
+        declaration = self._declaration(
+            builder,
+            {
+                "queryText": {"type": "string", "required": True, "description": "q"},
+                "topK": {"type": "number", "required": False, "description": "n"},
+            },
+        )
+
+        assert set(declaration.parameters.properties) == {"queryText", "topK"}
+        assert declaration.parameters.properties["topK"].type.value == "NUMBER"
+        assert declaration.parameters.required == ["queryText"]
+
+    def test_every_schema_type_reaches_the_declaration(self, builder):
+        declaration = self._declaration(
+            builder,
+            {
+                name: {"type": name, "required": True, "description": ""}
+                for name in ("string", "number", "integer", "boolean", "object", "array")
+            },
+        )
+
+        assert {
+            name: schema.type.value
+            for name, schema in declaration.parameters.properties.items()
+        } == {
+            "string": "STRING",
+            "number": "NUMBER",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
+            "object": "OBJECT",
+            "array": "ARRAY",
+        }
+
+    def test_a_legacy_string_param_is_declared_as_a_required_string(self, builder):
+        declaration = self._declaration(builder, {"queryText": "{query}"})
+
+        assert declaration.parameters.properties["queryText"].type.value == "STRING"
+        assert declaration.parameters.required == ["queryText"]
+
+    def test_a_name_that_is_not_an_identifier_does_not_break_the_build(self, builder):
+        declaration = self._declaration(
+            builder,
+            {
+                "query-text": {"type": "string", "required": True, "description": ""},
+                "queryText": {"type": "string", "required": True, "description": ""},
+            },
+        )
+
+        assert set(declaration.parameters.properties) == {"queryText"}
+        assert "query-text" in declaration.description
+
+    def test_a_tool_without_body_params_declares_nothing(self, builder):
+        declaration = self._declaration(builder, {})
+
+        assert declaration.parameters is None
+
+    def test_the_declared_argument_reaches_the_request_body(self, builder):
+        built = builder()._create_http_tool(
+            self._config(
+                {"queryText": {"type": "string", "required": True, "description": "q"}}
+            )
+        )
+        target = f"{builder.__module__}.requests.request"
+        with patch(target) as request:
+            request.return_value = MagicMock(status_code=200, json=lambda: {"ok": True})
+            declared = inspect.signature(built.func).parameters
+            built.func(**{name: "hello" for name in declared})
+
+        assert request.call_args.kwargs["json"] == {"queryText": "hello"}

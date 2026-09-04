@@ -27,9 +27,11 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 """
 
-from typing import Any, Container, Dict, List, Optional
+from typing import Any, Callable, Container, Dict, List, Optional
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
+import inspect
+import keyword
 import requests
 import json
 import urllib.parse
@@ -54,7 +56,7 @@ def strip_modes_meta(values: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def _normalize_body_param(param_config: Any) -> Dict[str, Any]:
+def normalize_body_param(param_config: Any) -> Dict[str, Any]:
     """Coerce a body param into the {type, required, description} schema.
 
     Legacy tools stored each body param as a plain string instead of a schema
@@ -73,6 +75,65 @@ def _normalize_body_param(param_config: Any) -> Dict[str, Any]:
         "required": True,
         "description": str(param_config) if param_config is not None else "",
     }
+
+
+BODY_PARAM_ANNOTATIONS: Dict[str, Any] = {
+    "string": str,
+    "number": float,
+    "integer": int,
+    "boolean": bool,
+    "object": dict,
+    "array": list,
+}
+
+
+def declare_body_params(func: Callable, body_params: Dict[str, Any]) -> None:
+    """Expose the body params as arguments of `func`, in place.
+
+    The ADK builds the tool declaration the LLM sees from the SIGNATURE, never
+    from the docstring. `http_tool(**kwargs)` therefore reached the model as a
+    tool taking no arguments: it called with none, the body came out empty and
+    the endpoint answered 400. An optional param needs Optional[T] plus a
+    default — a bare default of None makes the ADK drop the required list
+    altogether and every param turns optional.
+    """
+    parameters = []
+    annotations: Dict[str, Any] = {}
+
+    for param, param_config in body_params.items():
+        if not param.isidentifier() or keyword.iskeyword(param):
+            # Not expressible as a Python parameter; stays docstring-only.
+            logger.warning(
+                f"Body param '{param}' is not a valid identifier and cannot be "
+                f"declared to the LLM"
+            )
+            continue
+
+        schema = normalize_body_param(param_config)
+        annotation = BODY_PARAM_ANNOTATIONS.get(schema["type"], str)
+        if schema["required"]:
+            parameters.append(
+                inspect.Parameter(
+                    param, inspect.Parameter.KEYWORD_ONLY, annotation=annotation
+                )
+            )
+        else:
+            annotation = Optional[annotation]
+            parameters.append(
+                inspect.Parameter(
+                    param,
+                    inspect.Parameter.KEYWORD_ONLY,
+                    annotation=annotation,
+                    default=None,
+                )
+            )
+        annotations[param] = annotation
+
+    if not parameters:
+        return
+
+    func.__signature__ = inspect.Signature(parameters)
+    func.__annotations__ = annotations
 
 
 def exit_loop(tool_context: ToolContext):
@@ -241,7 +302,7 @@ class CustomToolBuilder:
 
         # Adds body parameters
         for param, param_config in body_params.items():
-            schema = _normalize_body_param(param_config)
+            schema = normalize_body_param(param_config)
             required = "Required" if schema["required"] else "Optional"
             param_docs.append(
                 f"{param} ({schema['type']}, {required}): {schema['description']}"
@@ -271,6 +332,8 @@ class CustomToolBuilder:
             logger.info(
                 f"Custom tool '{name}' is exposed to the LLM as '{http_tool.__name__}'"
             )
+
+        declare_body_params(http_tool, body_params)
 
         return FunctionTool(func=http_tool)
 
