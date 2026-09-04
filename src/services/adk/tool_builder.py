@@ -36,7 +36,8 @@ from src.utils.logger import setup_logger
 from src.utils.tool_naming import sanitize_tool_name, unique_tool_name
 from src.services.adk.custom_tools import (
     CustomToolBuilder,
-    _normalize_body_param,
+    declare_body_params,
+    normalize_body_param,
     strip_modes_meta,
 )
 from src.services.adk.tools import exit_loop
@@ -248,7 +249,7 @@ class ToolBuilder:
 
         # Adds body parameters
         for param, param_config in body_params.items():
-            schema = _normalize_body_param(param_config)
+            schema = normalize_body_param(param_config)
             required = "Required" if schema["required"] else "Optional"
             param_docs.append(
                 f"{param} ({schema['type']}, {required}): {schema['description']}"
@@ -278,6 +279,8 @@ class ToolBuilder:
             logger.info(
                 f"Custom tool '{name}' is exposed to the LLM as '{http_tool.__name__}'"
             )
+
+        declare_body_params(http_tool, body_params)
 
         return FunctionTool(func=http_tool)
 
