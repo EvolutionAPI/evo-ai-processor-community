@@ -77,6 +77,64 @@ def test_normalize_is_idempotent_under_repeated_application():
     assert model == "openrouter/openai/gpt-4.1"
 
 
+# --- Perplexity: Responses ids are routed, legacy chat ids are not ---------
+
+_TOOLS_WHITELIST = {"allowed_openai_params": ["tools"]}
+
+
+@pytest.mark.parametrize(
+    ("model_in", "model_out", "extra_out"),
+    [
+        # Doubled vendor: the current Sonar. Without the marker the remainder
+        # collides with the legacy `perplexity/sonar` entry.
+        (
+            "perplexity/perplexity/sonar",
+            "perplexity/responses/perplexity/sonar",
+            _TOOLS_WHITELIST,
+        ),
+        # Presets are the other shape the Responses catalogue uses.
+        (
+            "perplexity/preset/pro-search",
+            "perplexity/responses/preset/pro-search",
+            _TOOLS_WHITELIST,
+        ),
+        (
+            "perplexity/preset/deep-research",
+            "perplexity/responses/preset/deep-research",
+            _TOOLS_WHITELIST,
+        ),
+        # Models Perplexity fronts from other vendors follow the same shape.
+        (
+            "perplexity/anthropic/claude-sonnet-4-5",
+            "perplexity/responses/anthropic/claude-sonnet-4-5",
+            _TOOLS_WHITELIST,
+        ),
+        # Already marked — idempotent.
+        (
+            "perplexity/responses/perplexity/sonar",
+            "perplexity/responses/perplexity/sonar",
+            _TOOLS_WHITELIST,
+        ),
+        # Single segment is a retired Chat Completions id. An agent still on one
+        # keeps the route it was created with; nothing rewrites its model.
+        ("perplexity/sonar", "perplexity/sonar", {}),
+        ("perplexity/sonar-reasoning-pro", "perplexity/sonar-reasoning-pro", {}),
+    ],
+)
+def test_normalize_perplexity_models(model_in, model_out, extra_out):
+    assert normalize_model_for_provider(model_in, "perplexity") == (
+        model_out,
+        extra_out,
+    )
+
+
+def test_perplexity_model_on_openrouter_key_stays_on_openrouter():
+    """The provider still wins: an OpenRouter key must not reach Perplexity."""
+    normalized, extra = normalize_model_for_provider("perplexity/sonar", "openrouter")
+    assert normalized == "openrouter/perplexity/sonar"
+    assert extra == {"api_base": "https://openrouter.ai/api/v1"}
+
+
 # --- AC8: get_api_key returns (api_key, provider) --------------------------
 
 # The agent_utils module pulls in google-adk / langgraph / MCP through its
