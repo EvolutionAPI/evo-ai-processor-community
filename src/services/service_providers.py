@@ -84,6 +84,19 @@ session_service = DatabaseSessionService(
     pool_recycle=1800,
 )
 
+# CRM-532: the sessions table is written by the ADK's OWN async engine — this
+# code never issues that INSERT — so binding app.current_tenant_id only on the
+# processor's sync engine would leave create_session hitting the fail-closed
+# NOT NULL. The ADK exposes its AsyncEngine as `db_engine`; register the tenant
+# binding on its sync_engine, the same handle the ADK itself uses for its own
+# connect listener. Best-effort: never let this break service startup.
+try:
+    from src.config.tenant_binding import install_tenant_binding
+
+    install_tenant_binding(session_service.db_engine.sync_engine)
+except Exception as exc:  # pragma: no cover - defensive
+    logger.warning("Could not install tenant binding on the ADK session engine: %s", exc)
+
 
 # Initialize artifacts service using the factory
 from src.services.adk.artifacts.artifact_factory import get_artifact_service

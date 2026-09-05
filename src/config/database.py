@@ -56,6 +56,14 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Bind app.current_tenant_id on every checkout of this engine, so the processor's
+# own writes (metrics/metadata) and RLS reads carry the request's tenant. The ADK
+# session engine is bound separately in service_providers (its own async engine).
+# CRM-532.
+from src.config.tenant_binding import install_tenant_binding  # noqa: E402
+
+install_tenant_binding(engine)
+
 Base = declarative_base()
 
 
