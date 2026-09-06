@@ -33,6 +33,7 @@ from fastapi import HTTPException, status
 from src.models.models import Agent
 from typing import List, Optional, Union, Dict, Any
 from src.services import custom_tool_service, custom_mcp_server_service
+from src.utils.tool_naming import sanitize_agent_name
 import uuid
 import logging
 
@@ -405,12 +406,16 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
         # Reconstruct custom configurations from saved IDs
         _reconstruct_custom_configurations(db, agent)
 
-        # Sanitize agent name if it contains spaces or special characters
-        if agent.name and any(c for c in agent.name if not (c.isalnum() or c == "_")):
-            agent.name = "".join(
-                c if c.isalnum() or c == "_" else "_" for c in agent.name
+        # The name is what the ADK and the provider see once this agent is
+        # attached as a tool, so coerce it here (unconditionally: empty is
+        # invalid too) and persist only when it actually changed. CRM-501.
+        sanitized_name = sanitize_agent_name(agent.name)
+        if sanitized_name != agent.name:
+            logger.info(
+                f"Agent {agent.id} renamed {agent.name!r} -> {sanitized_name!r} "
+                "to satisfy the ADK/provider name contract"
             )
-            # Update in database
+            agent.name = sanitized_name
             db.commit()
 
         # Sanitize agent configuration to prevent validation errors
@@ -509,14 +514,14 @@ def get_agents_by_account(
             # Reconstruct custom configurations from saved IDs
             _reconstruct_custom_configurations(db, agent)
 
-            # Sanitize agent names if they contain spaces or special characters
-            if agent.name and any(
-                c for c in agent.name if not (c.isalnum() or c == "_")
-            ):
-                agent.name = "".join(
-                    c if c.isalnum() or c == "_" else "_" for c in agent.name
+            # Same contract as get_agent, same reason. CRM-501.
+            sanitized_name = sanitize_agent_name(agent.name)
+            if sanitized_name != agent.name:
+                logger.info(
+                    f"Agent {agent.id} renamed {agent.name!r} -> "
+                    f"{sanitized_name!r} to satisfy the ADK/provider name contract"
                 )
-                # Update in database
+                agent.name = sanitized_name
                 db.commit()
 
             # Sanitize agent configurations to prevent validation errors

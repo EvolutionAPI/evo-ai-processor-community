@@ -13,6 +13,7 @@ import pytest
 from src.utils.tool_naming import (
     FALLBACK_TOOL_NAME,
     MAX_TOOL_NAME_LENGTH,
+    sanitize_agent_name,
     sanitize_tool_name,
     unique_tool_name,
 )
@@ -95,3 +96,41 @@ class TestUniqueToolName:
         result = unique_tool_name(base, {base})
         assert len(result) <= MAX_TOOL_NAME_LENGTH
         assert OPENAI_PATTERN.match(result)
+
+
+class TestSanitizeAgentName:
+    """Agent names carry a second constraint: the ADK's BaseAgent requires a
+    Python identifier, which a hyphen satisfies for the provider but not for it
+    (CRM-501)."""
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            # The UI's own sanitizeAgentName emits hyphens, so this is the
+            # everyday shape, not an import edge.
+            ("suporte_-_n1", "suporte_n1"),
+            ("brave-search", "brave_search"),
+            # A leading digit is valid for the provider, never an identifier.
+            ("1 Agente", "_1_Agente"),
+            # Accents still collapse the same way as for a tool name.
+            ("Café Ação", "Caf_A_o"),
+            # Already an identifier: untouched.
+            ("get_weather", "get_weather"),
+            ("_private", "_private"),
+            # Nothing usable left.
+            ("", FALLBACK_TOOL_NAME),
+            ("---", FALLBACK_TOOL_NAME),
+        ],
+    )
+    def test_sanitizes_to_expected(self, raw, expected):
+        assert sanitize_agent_name(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["suporte_-_n1", "1 Agente", "Café Ação", "---", "", "a" * 200, "valid\n"],
+    )
+    def test_output_is_always_an_identifier_the_providers_accept(self, raw):
+        result = sanitize_agent_name(raw)
+        assert result.isidentifier(), result
+        assert OPENAI_PATTERN.match(result), result
+        assert len(result) <= MAX_TOOL_NAME_LENGTH
