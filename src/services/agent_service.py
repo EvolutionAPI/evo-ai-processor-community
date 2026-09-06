@@ -33,7 +33,7 @@ from fastapi import HTTPException, status
 from src.models.models import Agent
 from typing import List, Optional, Union, Dict, Any
 from src.services import custom_tool_service, custom_mcp_server_service
-from src.utils.tool_naming import sanitize_tool_name
+from src.utils.tool_naming import sanitize_agent_name
 import uuid
 import logging
 
@@ -406,16 +406,16 @@ async def get_agent(db: Session, agent_id: Union[uuid.UUID, str]) -> Optional[Ag
         # Reconstruct custom configurations from saved IDs
         _reconstruct_custom_configurations(db, agent)
 
-        # Coerce the agent name to a valid LLM function name (^[a-zA-Z0-9_-]+$).
-        # str.isalnum() is True for accented chars ("café".isalnum() is True), so
-        # the old inline guard let accents through and the provider 400'd on
-        # tools[].function.name when the agent is attached as a tool. Call the
-        # shared helper unconditionally (CRM-499) — an empty/None name is also
-        # invalid, and its "tool" fallback fixes it too. Persist only on change.
-        sanitized_name = sanitize_tool_name(agent.name)
+        # The name is what the ADK and the provider see once this agent is
+        # attached as a tool, so coerce it here (unconditionally: empty is
+        # invalid too) and persist only when it actually changed. CRM-501.
+        sanitized_name = sanitize_agent_name(agent.name)
         if sanitized_name != agent.name:
+            logger.info(
+                f"Agent {agent.id} renamed {agent.name!r} -> {sanitized_name!r} "
+                "to satisfy the ADK/provider name contract"
+            )
             agent.name = sanitized_name
-            # Update in database
             db.commit()
 
         # Sanitize agent configuration to prevent validation errors
@@ -514,13 +514,14 @@ def get_agents_by_account(
             # Reconstruct custom configurations from saved IDs
             _reconstruct_custom_configurations(db, agent)
 
-            # Same as get_agent: coerce to a valid LLM function name via the
-            # shared helper (unconditional — str.isalnum() lets accents through
-            # and an empty/None name is invalid too). Persist only on change.
-            sanitized_name = sanitize_tool_name(agent.name)
+            # Same contract as get_agent, same reason. CRM-501.
+            sanitized_name = sanitize_agent_name(agent.name)
             if sanitized_name != agent.name:
+                logger.info(
+                    f"Agent {agent.id} renamed {agent.name!r} -> "
+                    f"{sanitized_name!r} to satisfy the ADK/provider name contract"
+                )
                 agent.name = sanitized_name
-                # Update in database
                 db.commit()
 
             # Sanitize agent configurations to prevent validation errors
