@@ -1,7 +1,7 @@
 """UsageReporter extension point.
 
 Community default: no-op. The processor always persists each execution
-into ``evo_agent_processor_execution_metrics`` locally and then calls
+into ``evo_ai_agent_processor_execution_metrics`` locally and then calls
 ``report_execution`` with the same data; the default discards the call.
 A consumer registers a non-default implementation to mirror the local
 table into external observability.
