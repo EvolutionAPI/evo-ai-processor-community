@@ -1,11 +1,7 @@
 """The single legacy alembic migration (26a14ac7025d) must be idempotent.
 
-A bare ``CREATE TABLE`` crash-loops the processor boot when the table already
-exists but this alembic's ``alembic_version`` is empty — created by a prior run
-or by ``Base.metadata.create_all`` on an older image (CRM-543). This runs in the
-unit lane (no DB): it loads the migration by path and drives ``upgrade``/
-``downgrade`` with a mocked bind, asserting the ``to_regclass`` guard gates the
-DDL. The real crash→fix is proven end-to-end against Postgres (see the PR).
+Unit lane (no DB): loads the migration by path and drives upgrade/downgrade with
+a mocked bind, asserting the ``to_regclass`` guard gates the DDL (CRM-543).
 """
 import importlib.util
 from pathlib import Path
@@ -47,6 +43,14 @@ def test_upgrade_creates_when_table_absent():
          patch.object(mod.op, "create_table") as create_table:
         mod.upgrade()
     create_table.assert_called_once()
+
+
+def test_downgrade_drops_when_table_exists():
+    mod = _load_migration()
+    with patch.object(mod.op, "get_bind", return_value=_bind(True)), \
+         patch.object(mod.op, "drop_table") as drop_table:
+        mod.downgrade()
+    drop_table.assert_called_once_with(mod.TABLE)
 
 
 def test_downgrade_skips_drop_when_table_absent():
